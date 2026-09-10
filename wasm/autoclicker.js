@@ -153,6 +153,22 @@
     "#ruian-ac-panel .ac-hint{margin-top:8px;color:#888;font-size:11px;line-height:1.4}"
   ].join("");
 
+  // 左上角备用开关按钮（即使 | 键因输入法/键盘布局失效也能打开面板）
+  var FAB_CSS = [
+    "#ruian-ac-fab{position:fixed;left:8px;top:8px;z-index:999998;width:32px;height:32px;border-radius:50%;background:rgba(20,20,20,.72);border:2px solid #55ff55;color:#55ff55;font-family:monospace;font-weight:700;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;user-select:none;-webkit-user-select:none;opacity:.55;padding:0}",
+    "#ruian-ac-fab:hover{opacity:1;background:rgba(20,40,20,.9)}"
+  ].join("");
+
+  function isToggleKey(e) {
+    var k = e.key;
+    if (k === "|" || k === "｜" || k === "\\" || k === "、" || k === "¦") return true;
+    var kc = e.keyCode;
+    if (kc === 220 || kc === 226) return true;
+    var c = e.code;
+    if (c === "Backslash" || c === "IntlBackslash") return true;
+    return false;
+  }
+
   function makeToggleButton(label, on) {
     var btn = document.createElement("button");
     btn.type = "button";
@@ -258,14 +274,35 @@
     refreshClicking();
   }
 
+  // 左上角备用开关按钮（即使 | 键因输入法/键盘布局失效也能打开面板）
+  function buildFab() {
+    var style = document.createElement("style");
+    style.textContent = FAB_CSS;
+    document.head.appendChild(style);
+
+    var fab = document.createElement("button");
+    fab.id = "ruian-ac-fab";
+    fab.type = "button";
+    fab.textContent = "AC";
+    fab.title = "连点器设置（或按 | 键）";
+    fab.addEventListener("click", function (ev) {
+      if (ev.stopPropagation) ev.stopPropagation();
+      togglePanel();
+    });
+    document.body.appendChild(fab);
+    return fab;
+  }
+
   // ---------- 监听真实输入 ----------
   window.addEventListener("keydown", function (e) {
-    var isPipe = e.key === "|" ||
-      (((e.keyCode === 220) || (e.code === "Backslash")) && e.shiftKey === true);
-    if (isPipe) {
+    if (isToggleKey(e)) {
       if (e.preventDefault) e.preventDefault();
       if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+      console.log("[AutoClicker] 触发按键: key=" + JSON.stringify(e.key) + " keyCode=" + e.keyCode + " code=" + e.code);
       togglePanel();
+    } else if (e.keyCode === 220 || e.keyCode === 226 || e.code === "Backslash" || e.code === "IntlBackslash") {
+      // 按到了反斜杠/竖线附近的键但没有匹配上，打印实际 key 值便于排查
+      console.log("[AutoClicker] 按到 \\ 键但未匹配（key=" + JSON.stringify(e.key) + "），面板未打开，请把此 key 值反馈给我");
     }
   }, true);
 
@@ -312,11 +349,20 @@
   loadSettings();
   virtX = Math.round(window.innerWidth / 2);
   virtY = Math.round(window.innerHeight / 2);
+  buildFab();
+  console.log("[AutoClicker] 已加载。按 | 键（Shift+\\）或点击左上角 AC 按钮打开设置面板。");
 
   // 供调试 / 验证用的小接口（不影响游戏）
   window.__ruianAC = {
     getSettings: function () {
       return JSON.parse(JSON.stringify(settings));
+    },
+    togglePanel: togglePanel,
+    openPanel: function () {
+      if (!panelVisible) togglePanel();
+    },
+    closePanel: function () {
+      if (panelVisible) togglePanel();
     },
     setEnabled: function (v) {
       settings.enabled = !!v;
