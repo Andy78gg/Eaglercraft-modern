@@ -24,6 +24,8 @@
 		<script type="text/javascript" src="perfmod.js?v=3.0"></script>
 		<!-- Ruian AutoClicker 连点器 Mod：必须在 eagruntime.js 之前加载 -->
 		<script type="text/javascript" src="autoclicker.js?v=1.1"></script>
+		<!-- Ruian 首次启动设置预设：必须在 eagruntime.js 之前加载 -->
+		<script type="text/javascript" src="preset.js?v=1.0"></script>
 		<script type="text/javascript">
 			"use strict";
 			window.addEventListener("load", async function() {
@@ -69,6 +71,11 @@
 					// EaglerBoost 性能增强 Mod：注入优化选项与设置钩子
 					if(typeof window.__eaglerBoostApply === "function") {
 						window.__eaglerBoostApply(eaglercraftXOpts);
+					}
+
+					// Ruian 首次启动设置：必须在 EaglerBoost 写入之后调用，避免被其覆盖
+					if(typeof window.__eaglerPresetApply === "function") {
+						window.__eaglerPresetApply();
 					}
 					
 					window.__eaglercraftXLoaderContext = {
