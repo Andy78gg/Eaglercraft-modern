@@ -4,8 +4,14 @@
  * 功能：
  *   - 按住鼠标左键 / 右键时，按设定 CPS 自动连点
  *   - CPS 可在 1 ~ 100 之间调节（默认 12）
- *   - 按 | 键（Shift + \）或 V 键打开 / 关闭连点器设置面板
+ *   - 按 | 键（Shift + \）或 V 键：直接【打开 / 关闭】连点器（不弹界面）
+ *   - 左上角绿色 AC 圆钮：打开设置面板（调 CPS / 左右键开关）
  *   - 设置保存在 localStorage，下次启动自动生效
+ *
+ * v1.3 变更：
+ *   用户反馈 V 键不应打开设置界面，只要“打开/关闭连点器”。
+ *   故 | 与 V 键改为直接切换连点器总开关（enabled），
+ *   设置面板仅由左上角 AC 按钮打开。
  *
  * 原理（已按本仓库 wasm/eagruntime.js 逐一核实）：
  *   EaglercraftX WASM-GC 客户端把鼠标输入绑定在
@@ -63,6 +69,9 @@
   var intervalId = null;             // 连点循环定时器
   var panelEl = null;                // 设置面板 DOM
   var panelVisible = false;          // 面板是否显示
+  var fabEl = null;                  // 左上角 AC 圆钮
+  var toastEl = null;                // 开关提示条
+  var toastTimer = null;
   var virtX = 0, virtY = 0;          // 光标屏幕坐标（指针锁定时累加位移推算）
 
   // ---------- 工具 ----------
@@ -140,7 +149,44 @@
     }, interval);
   }
 
-  // ---------- 设置面板 ----------
+  // ---------- 连点器总开关（| / V 键调用） ----------
+  function toggleEnabled() {
+    settings.enabled = !settings.enabled;
+    saveSettings();
+    refreshClicking();
+    updateFabState();
+    showToast(settings.enabled ? "连点器：开" : "连点器：关");
+  }
+
+  // ---------- 顶部开关提示条 ----------
+  var TOAST_CSS = [
+    "#ruian-ac-toast{position:fixed;top:50px;left:50%;transform:translateX(-50%);z-index:1000000;background:rgba(15,15,15,.92);border:1px solid #55ff55;color:#55ff55;font-family:monospace;font-size:14px;font-weight:700;padding:6px 16px;border-radius:4px;letter-spacing:1px;opacity:0;transition:opacity .15s;pointer-events:none;user-select:none;-webkit-user-select:none}"
+  ].join("");
+
+  function ensureToast() {
+    if (toastEl) return toastEl;
+    var style = document.createElement("style");
+    style.id = "ruian-ac-toast-style";
+    style.textContent = TOAST_CSS;
+    document.head.appendChild(style);
+    toastEl = document.createElement("div");
+    toastEl.id = "ruian-ac-toast";
+    document.body.appendChild(toastEl);
+    return toastEl;
+  }
+
+  function showToast(text) {
+    var t = ensureToast();
+    t.textContent = text;
+    t.style.opacity = "1";
+    if (toastTimer !== null) clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () {
+      t.style.opacity = "0";
+      toastTimer = null;
+    }, 1200);
+  }
+
+  // ---------- 设置面板（仅由左上角 AC 按钮打开） ----------
   var PANEL_CSS = [
     "#ruian-ac-panel{position:fixed;top:12px;right:12px;z-index:999999;width:250px;background:rgba(15,15,15,.94);border:2px solid #55ff55;border-radius:4px;padding:10px 12px;font-family:monospace;color:#e0e0e0;box-shadow:0 0 14px rgba(85,255,85,.25);user-select:none;-webkit-user-select:none;cursor:default;box-sizing:border-box;display:none}",
     "#ruian-ac-panel .ac-title{font-weight:700;color:#55ff55;font-size:13px;margin-bottom:8px;letter-spacing:1px}",
@@ -153,10 +199,12 @@
     "#ruian-ac-panel .ac-hint{margin-top:8px;color:#888;font-size:11px;line-height:1.4}"
   ].join("");
 
-  // 左上角备用开关按钮（即使 | 键因输入法/键盘布局失效也能打开面板）
+  // 左上角 AC 圆钮（打开设置面板，并显示连点器开关状态）
   var FAB_CSS = [
     "#ruian-ac-fab{position:fixed;left:8px;top:8px;z-index:999998;width:32px;height:32px;border-radius:50%;background:rgba(20,20,20,.72);border:2px solid #55ff55;color:#55ff55;font-family:monospace;font-weight:700;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;user-select:none;-webkit-user-select:none;opacity:.55;padding:0}",
-    "#ruian-ac-fab:hover{opacity:1;background:rgba(20,40,20,.9)}"
+    "#ruian-ac-fab:hover{opacity:1;background:rgba(20,40,20,.9)}",
+    "#ruian-ac-fab.ruian-ac-off{border-color:#ff5555;color:#ff5555}",
+    "#ruian-ac-fab.ruian-ac-off:hover{background:rgba(40,20,20,.9)}"
   ].join("");
 
   function isToggleKey(e) {
@@ -201,6 +249,7 @@
       btnToggle.textContent = "连点器：" + (settings.enabled ? "开" : "关");
       saveSettings();
       refreshClicking();
+      updateFabState();
     });
     rowToggle.appendChild(btnToggle);
 
@@ -253,7 +302,7 @@
 
     var hint = document.createElement("div");
     hint.className = "ac-hint";
-    hint.textContent = "按住左键 / 右键自动连点；再按 | 或 V 隐藏面板";
+    hint.textContent = "按 | 或 V 键直接开关连点器；本面板仅由左上角 AC 按钮打开";
 
     panel.appendChild(title);
     panel.appendChild(rowToggle);
@@ -275,7 +324,7 @@
     refreshClicking();
   }
 
-  // 左上角备用开关按钮（即使 | 键因输入法/键盘布局失效也能打开面板）
+  // 左上角 AC 圆钮：打开设置面板，并反映连点器开关状态
   function buildFab() {
     var style = document.createElement("style");
     style.textContent = FAB_CSS;
@@ -285,26 +334,43 @@
     fab.id = "ruian-ac-fab";
     fab.type = "button";
     fab.textContent = "AC";
-    fab.title = "连点器设置（或按 | / V 键）";
+    fab.title = "连点器设置面板（调 CPS / 左右键；按 | 或 V 直接开关连点器）";
     fab.addEventListener("click", function (ev) {
       if (ev.stopPropagation) ev.stopPropagation();
       togglePanel();
     });
     document.body.appendChild(fab);
+    fabEl = fab;
+    updateFabState();
     return fab;
+  }
+
+  // 根据连点器开关状态更新 AC 圆钮颜色
+  function updateFabState() {
+    if (!fabEl) return;
+    if (settings.enabled) {
+      fabEl.classList.remove("ruian-ac-off");
+      fabEl.style.borderColor = "#55ff55";
+      fabEl.style.color = "#55ff55";
+    } else {
+      fabEl.classList.add("ruian-ac-off");
+      fabEl.style.borderColor = "#ff5555";
+      fabEl.style.color = "#ff5555";
+    }
   }
 
   // ---------- 监听真实输入 ----------
   window.addEventListener("keydown", function (e) {
-    if (e.repeat) return; // 忽略长按重复触发，避免面板反复开关
+    if (e.repeat) return; // 忽略长按重复触发，避免连点器反复开关
     if (isToggleKey(e)) {
       if (e.preventDefault) e.preventDefault();
       if (e.stopImmediatePropagation) e.stopImmediatePropagation();
       console.log("[AutoClicker] 触发按键: key=" + JSON.stringify(e.key) + " keyCode=" + e.keyCode + " code=" + e.code);
-      togglePanel();
+      // | / V 键：直接打开 / 关闭连点器（不弹设置界面）
+      toggleEnabled();
     } else if (e.keyCode === 220 || e.keyCode === 226 || e.code === "Backslash" || e.code === "IntlBackslash") {
       // 按到了反斜杠/竖线附近的键但没有匹配上，打印实际 key 值便于排查
-      console.log("[AutoClicker] 按到 \\ 键但未匹配（key=" + JSON.stringify(e.key) + "），面板未打开，请把此 key 值反馈给我");
+      console.log("[AutoClicker] 按到 \\ 键但未匹配（key=" + JSON.stringify(e.key) + "），连点器未切换，请把此 key 值反馈给我");
     }
   }, true);
 
@@ -352,7 +418,7 @@
   virtX = Math.round(window.innerWidth / 2);
   virtY = Math.round(window.innerHeight / 2);
   buildFab();
-  console.log("[AutoClicker] 已加载。按 | 键（Shift+\\）或 V 键，或点击左上角 AC 按钮打开设置面板。");
+  console.log("[AutoClicker] 已加载。按 | 键（Shift+\\）或 V 键直接开关连点器；点左上角 AC 按钮打开设置面板。");
 
   // 供调试 / 验证用的小接口（不影响游戏）
   window.__ruianAC = {
@@ -366,10 +432,12 @@
     closePanel: function () {
       if (panelVisible) togglePanel();
     },
+    toggleEnabled: toggleEnabled,
     setEnabled: function (v) {
       settings.enabled = !!v;
       saveSettings();
       refreshClicking();
+      updateFabState();
     },
     setCps: function (v) {
       var n = parseInt(v, 10);
