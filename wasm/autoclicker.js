@@ -4,14 +4,14 @@
  * 功能：
  *   - 按住鼠标左键 / 右键时，按设定 CPS 自动连点
  *   - CPS 可在 1 ~ 100 之间调节（默认 12）
- *   - 按 | 键（Shift + \）或 V 键：直接【打开 / 关闭】连点器（不弹界面）
- *   - 左上角绿色 AC 圆钮：打开设置面板（调 CPS / 左右键开关）
+ *   - 按 V 键：直接【打开 / 关闭】连点器（不弹界面）
+ *   - 按 | 键（Shift + \）：打开 / 关闭设置面板（调 CPS / 左右键）
+ *   - 左上角绿色 AC 圆钮：同样打开设置面板
  *   - 设置保存在 localStorage，下次启动自动生效
  *
- * v1.3 变更：
- *   用户反馈 V 键不应打开设置界面，只要“打开/关闭连点器”。
- *   故 | 与 V 键改为直接切换连点器总开关（enabled），
- *   设置面板仅由左上角 AC 按钮打开。
+ * v1.4 变更：
+ *   按键分工明确：V = 连点器总开关；| = 打开参数设置面板。
+ *   （v1.3 曾把 | 一并改为开关，用户要求 | 用于调参数，已恢复）
  *
  * 原理（已按本仓库 wasm/eagruntime.js 逐一核实）：
  *   EaglercraftX WASM-GC 客户端把鼠标输入绑定在
@@ -149,7 +149,7 @@
     }, interval);
   }
 
-  // ---------- 连点器总开关（| / V 键调用） ----------
+  // ---------- 连点器总开关（V 键调用） ----------
   function toggleEnabled() {
     settings.enabled = !settings.enabled;
     saveSettings();
@@ -186,7 +186,7 @@
     }, 1200);
   }
 
-  // ---------- 设置面板（仅由左上角 AC 按钮打开） ----------
+  // ---------- 设置面板（| 键 / AC 按钮打开） ----------
   var PANEL_CSS = [
     "#ruian-ac-panel{position:fixed;top:12px;right:12px;z-index:999999;width:250px;background:rgba(15,15,15,.94);border:2px solid #55ff55;border-radius:4px;padding:10px 12px;font-family:monospace;color:#e0e0e0;box-shadow:0 0 14px rgba(85,255,85,.25);user-select:none;-webkit-user-select:none;cursor:default;box-sizing:border-box;display:none}",
     "#ruian-ac-panel .ac-title{font-weight:700;color:#55ff55;font-size:13px;margin-bottom:8px;letter-spacing:1px}",
@@ -207,14 +207,23 @@
     "#ruian-ac-fab.ruian-ac-off:hover{background:rgba(40,20,20,.9)}"
   ].join("");
 
-  function isToggleKey(e) {
+  // | 键（Shift+\，含各种输入法形态）：打开 / 关闭设置面板
+  function isPipeKey(e) {
     var k = e.key;
     if (k === "|" || k === "｜" || k === "\\" || k === "、" || k === "¦") return true;
-    if (k === "v" || k === "V") return true;
     var kc = e.keyCode;
-    if (kc === 220 || kc === 226 || kc === 86) return true;
+    if (kc === 220 || kc === 226) return true;
     var c = e.code;
-    if (c === "Backslash" || c === "IntlBackslash" || c === "KeyV") return true;
+    if (c === "Backslash" || c === "IntlBackslash") return true;
+    return false;
+  }
+
+  // V 键：直接开关连点器
+  function isVKey(e) {
+    var k = e.key;
+    if (k === "v" || k === "V") return true;
+    if (e.keyCode === 86) return true;
+    if (e.code === "KeyV") return true;
     return false;
   }
 
@@ -302,7 +311,7 @@
 
     var hint = document.createElement("div");
     hint.className = "ac-hint";
-    hint.textContent = "按 | 或 V 键直接开关连点器；本面板仅由左上角 AC 按钮打开";
+    hint.textContent = "按 | 打开/关闭本面板调参数；按 V 直接开关连点器";
 
     panel.appendChild(title);
     panel.appendChild(rowToggle);
@@ -334,7 +343,7 @@
     fab.id = "ruian-ac-fab";
     fab.type = "button";
     fab.textContent = "AC";
-    fab.title = "连点器设置面板（调 CPS / 左右键；按 | 或 V 直接开关连点器）";
+    fab.title = "连点器设置面板（调 CPS / 左右键；按 | 打开，按 V 直接开关连点器）";
     fab.addEventListener("click", function (ev) {
       if (ev.stopPropagation) ev.stopPropagation();
       togglePanel();
@@ -361,16 +370,22 @@
 
   // ---------- 监听真实输入 ----------
   window.addEventListener("keydown", function (e) {
-    if (e.repeat) return; // 忽略长按重复触发，避免连点器反复开关
-    if (isToggleKey(e)) {
+    if (e.repeat) return; // 忽略长按重复触发，避免反复开关
+    if (isPipeKey(e)) {
+      // | 键：打开 / 关闭参数设置面板（调 CPS、左右键等）
       if (e.preventDefault) e.preventDefault();
       if (e.stopImmediatePropagation) e.stopImmediatePropagation();
-      console.log("[AutoClicker] 触发按键: key=" + JSON.stringify(e.key) + " keyCode=" + e.keyCode + " code=" + e.code);
-      // | / V 键：直接打开 / 关闭连点器（不弹设置界面）
+      console.log("[AutoClicker] 触发按键: key=" + JSON.stringify(e.key) + " keyCode=" + e.keyCode + " code=" + e.code + "（| 键：面板）");
+      togglePanel();
+    } else if (isVKey(e)) {
+      // V 键：直接打开 / 关闭连点器（不弹设置界面）
+      if (e.preventDefault) e.preventDefault();
+      if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+      console.log("[AutoClicker] 触发按键: key=" + JSON.stringify(e.key) + " keyCode=" + e.keyCode + " code=" + e.code + "（V 键：开关连点器）");
       toggleEnabled();
     } else if (e.keyCode === 220 || e.keyCode === 226 || e.code === "Backslash" || e.code === "IntlBackslash") {
       // 按到了反斜杠/竖线附近的键但没有匹配上，打印实际 key 值便于排查
-      console.log("[AutoClicker] 按到 \\ 键但未匹配（key=" + JSON.stringify(e.key) + "），连点器未切换，请把此 key 值反馈给我");
+      console.log("[AutoClicker] 按到 \\ 键但未匹配（key=" + JSON.stringify(e.key) + "），面板未打开，请把此 key 值反馈给我");
     }
   }, true);
 
@@ -418,7 +433,7 @@
   virtX = Math.round(window.innerWidth / 2);
   virtY = Math.round(window.innerHeight / 2);
   buildFab();
-  console.log("[AutoClicker] 已加载。按 | 键（Shift+\\）或 V 键直接开关连点器；点左上角 AC 按钮打开设置面板。");
+  console.log("[AutoClicker] 已加载。按 | 键（Shift+\\）打开设置面板调参数；按 V 键直接开关连点器。");
 
   // 供调试 / 验证用的小接口（不影响游戏）
   window.__ruianAC = {
