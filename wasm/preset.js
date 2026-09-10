@@ -14,10 +14,10 @@
  *   - 快捷栏 9 → 左Alt           → key_key.hotbar.9:56   (LWJGL KEY_LMENU=56)
  *   - 快捷栏 8 → Button 4        → key_key.hotbar.8:-97  （鼠标侧键，显示名=键码+101）
  *   - 快捷栏 7 → Button 5        → key_key.hotbar.7:-96
- *   - 保存工具栏激活器 → V        → key_key.saveToolbarActivator:47 (KEY_V=47)
+ *   - 保存工具栏激活器 → B        → key_key.saveToolbarActivator:48 (KEY_B=48)
  *   - 自由视角 → 左Ctrl           → key_key.freelook:29  (KEY_LCONTROL=29)
  *
- * 只在第一次启动时生效（localStorage 标记 ruian_preset_applied=1 后不再覆盖），
+ * 只在第一次启动时生效（localStorage 标记 ruian_preset_applied 为当前版本号后不再覆盖），
  * 之后用户在游戏里的改动会正常保存、不会被本脚本覆盖。
  * 控制台手动重放：__ruianPreset.apply() ；清除标记：__ruianPreset.reset()
  * ---------------------------------------------
@@ -30,6 +30,8 @@
   var SETTINGS_KEY = "g";
   var FULL_KEY = STORAGE_NAMESPACE + "." + SETTINGS_KEY;
   var MARKER_KEY = "ruian_preset_applied";
+  // 预设版本号：修改预设内容后 +1，旧标记会自动触发重新应用
+  var MARKER_VALUE = "2";
 
   var PRESET_TEXT = [
     "fov:0.5",
@@ -41,7 +43,7 @@
     "key_key.hotbar.9:56",
     "key_key.hotbar.8:-97",
     "key_key.hotbar.7:-96",
-    "key_key.saveToolbarActivator:47",
+    "key_key.saveToolbarActivator:48",
     "key_key.freelook:29"
   ].join("\n");
 
@@ -118,7 +120,7 @@
 
     var b64 = await gzipText(serializeSettings(map));
     ls.setItem(FULL_KEY, b64);
-    ls.setItem(MARKER_KEY, "1");
+    ls.setItem(MARKER_KEY, MARKER_VALUE);
     console.log("[RuianPreset] 首次启动设置已写入（共 " + Object.keys(map).length + " 项设置）。");
     return true;
   }
@@ -128,7 +130,7 @@
     var ls = getStorage();
     if (!ls) return;
     try {
-      if (ls.getItem(MARKER_KEY) === "1") {
+      if (ls.getItem(MARKER_KEY) === MARKER_VALUE) {
         console.log("[RuianPreset] 首次设置已应用过（标记存在），跳过。如需重放：__ruianPreset.apply()");
         return;
       }

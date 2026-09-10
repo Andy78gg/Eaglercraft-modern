@@ -4,7 +4,7 @@
  * 功能：
  *   - 按住鼠标左键 / 右键时，按设定 CPS 自动连点
  *   - CPS 可在 1 ~ 100 之间调节（默认 12）
- *   - 按 | 键（Shift + \）打开 / 关闭连点器设置面板
+ *   - 按 | 键（Shift + \）或 V 键打开 / 关闭连点器设置面板
  *   - 设置保存在 localStorage，下次启动自动生效
  *
  * 原理（已按本仓库 wasm/eagruntime.js 逐一核实）：
@@ -162,10 +162,11 @@
   function isToggleKey(e) {
     var k = e.key;
     if (k === "|" || k === "｜" || k === "\\" || k === "、" || k === "¦") return true;
+    if (k === "v" || k === "V") return true;
     var kc = e.keyCode;
-    if (kc === 220 || kc === 226) return true;
+    if (kc === 220 || kc === 226 || kc === 86) return true;
     var c = e.code;
-    if (c === "Backslash" || c === "IntlBackslash") return true;
+    if (c === "Backslash" || c === "IntlBackslash" || c === "KeyV") return true;
     return false;
   }
 
@@ -252,7 +253,7 @@
 
     var hint = document.createElement("div");
     hint.className = "ac-hint";
-    hint.textContent = "按住左键 / 右键自动连点；再按 | 隐藏面板";
+    hint.textContent = "按住左键 / 右键自动连点；再按 | 或 V 隐藏面板";
 
     panel.appendChild(title);
     panel.appendChild(rowToggle);
@@ -284,7 +285,7 @@
     fab.id = "ruian-ac-fab";
     fab.type = "button";
     fab.textContent = "AC";
-    fab.title = "连点器设置（或按 | 键）";
+    fab.title = "连点器设置（或按 | / V 键）";
     fab.addEventListener("click", function (ev) {
       if (ev.stopPropagation) ev.stopPropagation();
       togglePanel();
@@ -295,6 +296,7 @@
 
   // ---------- 监听真实输入 ----------
   window.addEventListener("keydown", function (e) {
+    if (e.repeat) return; // 忽略长按重复触发，避免面板反复开关
     if (isToggleKey(e)) {
       if (e.preventDefault) e.preventDefault();
       if (e.stopImmediatePropagation) e.stopImmediatePropagation();
@@ -350,7 +352,7 @@
   virtX = Math.round(window.innerWidth / 2);
   virtY = Math.round(window.innerHeight / 2);
   buildFab();
-  console.log("[AutoClicker] 已加载。按 | 键（Shift+\\）或点击左上角 AC 按钮打开设置面板。");
+  console.log("[AutoClicker] 已加载。按 | 键（Shift+\\）或 V 键，或点击左上角 AC 按钮打开设置面板。");
 
   // 供调试 / 验证用的小接口（不影响游戏）
   window.__ruianAC = {
