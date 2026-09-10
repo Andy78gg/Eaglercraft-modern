@@ -8,8 +8,13 @@
  *  3) 提升 FPS  —— 关闭雨/粒子/附魔光效/云、降平滑光照与 mipmap、
  *                  开启方块面剔除/区块网格优化，并关闭调试堆栈去混淆以减少卡顿
  *
- * 原理（已按本仓库 wasm/ 内的客户端逐一核实）：
- *  - 游戏设置保存在 localStorage 的 `_eaglercraft_1.12.g` 键里，值为 base64(GZIP(key:value 行))
+ * 原理（已按本仓库 classes.wasm 与官方 1.12.2 源码逐一核实）：
+ *  - 游戏设置保存在 localStorage 的 `_eaglercraft_1.12.g` 键里
+ *  - 1.12 客户端格式 = base64(纯 UTF-8 "key:value" 逐行文本)，【没有 gzip】
+ *    （writeOptions 用 PrintWriter 写纯文本，首行 version:1343；
+ *      loadOptions 用 IOUtils.readLines 按 UTF-8 直接读行解析）
+ *  - 注意：Eaglercraft 1.8 版本有 gzip，但本 1.12 构建没有；
+ *    早期版本误用 gzip 导致游戏全部解析失败，本次已修正
  *  - 本脚本在游戏启动前把增强预设直接写入该键（同时备份原设置），
  *    关闭时还原备份——不使用客户端 hooks 机制（该构建的 hooks 有 JSO null 崩溃问题）
  *  - eaglercraftXOpts 支持 enforceVSync / deobfStackTraces / checkGLErrors 等启动项
@@ -29,10 +34,10 @@
   // 备份键（游戏不会读取这个键）
   var BACKUP_KEY = STORAGE_NAMESPACE + "." + SETTINGS_KEY + "_eaglerboost_backup";
 
-  // 性能增强预设：base64(GZIP(设置文本))
-  // 生成方式：设置文本按 `key:value` 逐行排列后 gzip + base64（与游戏端完全一致）
+  // 性能增强预设：base64(设置文本)，纯文本行、无 gzip（与 1.12 游戏端完全一致）
+  // 生成方式：设置文本按 `key:value` 逐行排列后 UTF-8 + base64
   var BOOST_SETTINGS_B64 =
-    "H4sIAAAAAAAACm2QQW/CMAyF7/01jEnTlOM6wWUbE2hcJ5O61MJxosRZ6X79BIWKoB39Ptvv2c43GOWbfbNGaTCS7I3GjJWbwJawf6WkIBbN4/yGbBSiTui5iucVN4Jv6y7L4Ss0oJjMQ2VP5YKOo0frSzMUJR3qzDzFGKVNB43vk2mB09SdOt+vevkAhwrXRXBchGTmT7MKBXaM2zSIHVmAqGQZk5lX4M2schQchDf8QU5mVrUgdlhGCB3Zq9V4Uc0+N3fu4tdAUsQX/zlZlPqSSbSc37G3hwVYLM69wPOb3jF1q6Dk6BeUfOll45AU+MIxln8EJdn/z5w/7XrhHMs8bWbeRdp3WrSrV3S1z6J4N2CZQjgFH9U/AbYXakkCAAA=";
+    "dmVyc2lvbjoxMzQzCm1vZGVybl9sb2RSZW5kZXJpbmc6dHJ1ZQptb2Rlcm5fbG9kVmlld0Rpc3RhbmNlOjMyCm1vZGVybl9sb2RTdGFydERpc3RhbmNlOjgKcmVuZGVyRGlzdGFuY2U6OApvZkNodW5rVXBkYXRlczoxCmNodW5rRml4OnRydWUKZm9nOnRydWUKbW9kZXJuX2VudGl0eUN1bGxpbmc6dHJ1ZQplbnRpdHlTaGFkb3dzOmZhbHNlCm1vZGVybl9zaG93T3duTmFtZXRhZzp0cnVlCm1heEZwczoyNjAKZW5hYmxlVnN5bmM6dHJ1ZQpwYXJ0aWNsZXM6MgphbzowCm1pcG1hcExldmVsczowCmZhbmN5R3JhcGhpY3M6ZmFsc2UKcmVuZGVyQ2xvdWRzOmZhbHNlCm1vZGVybl9ub1JhaW46dHJ1ZQptb2Rlcm5fbm9QYXJ0aWNsZXM6dHJ1ZQptb2Rlcm5fbm9HbGludDpmYWxzZQptb2Rlcm5fYmxvY2tGYWNlQ3VsbGluZzp0cnVlCm1vZGVybl9jaHVua01lc2hPcHRpbWl6YXRpb246dHJ1ZQptb2Rlcm5fY3J5c3RhbE9wdGltaXplcjp0cnVlCm1vZGVybl9lYXRpbmdPcHRpbWl6ZXI6dHJ1ZQptb2Rlcm5fbW90aW9uQmx1cjpmYWxzZQptb2Rlcm5fZnVsbGJyaWdodDp0cnVlCm1vZGVybl90b3RlbUNvdW50ZXI6ZmFsc2UKbW9kZXJuX2NsaXBwaW5nOmZhbHNl";
 
   function getURLParam(name) {
     try {
