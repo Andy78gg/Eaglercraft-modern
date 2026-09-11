@@ -4,11 +4,16 @@
  * 功能：
  *   - 按住鼠标左键 / 右键时，按设定 CPS 自动连点
  *   - CPS 可在 1 ~ 100 之间调节（默认 12）
+ *   - CPS 跳动：每次点击间隔在 ±X% 内随机波动（默认 ±10%，可调 0~50%）
  *   - 按 V 键：直接【打开 / 关闭】连点器（不弹界面）
- *   - 按 | 键（Shift + \）：打开 / 关闭设置面板（调 CPS / 左右键）
+ *   - 按 | 键（Shift + \）：打开 / 关闭设置面板（调 CPS / 跳动 / 左右键）
  *   - 左上角绿色 AC 圆钮：同样打开设置面板
  *   - 设置保存在 localStorage，下次启动自动生效
  *
+ * v1.5 变更：
+ *   新增 CPS 跳动（jitter）：开启后每次点击间隔在目标 CPS 的
+ *   ±jitterPct% 范围内随机波动（例：CPS 20、跳动 ±10% → 实际 18~22），
+ *   更接近人手点击、不易被反作弊检测。
  * v1.4 变更：
  *   按键分工明确：V = 连点器总开关；| = 打开参数设置面板。
  *   （v1.3 曾把 | 一并改为开关，用户要求 | 用于调参数，已恢复）
@@ -33,6 +38,8 @@
   var settings = {
     enabled: true, // 连点器总开关
     cps: 12,       // 每秒点击数，1~100
+    jitter: true,  // CPS 跳动开关
+    jitterPct: 10, // 跳动幅度（±百分比），例：CPS 20 ±10% → 18~22
     left: true,    // 左键连点
     right: true    // 右键连点
   };
@@ -46,6 +53,10 @@
           if (typeof obj.enabled === "boolean") settings.enabled = obj.enabled;
           if (typeof obj.cps === "number") {
             settings.cps = Math.min(100, Math.max(1, Math.round(obj.cps)));
+          }
+          if (typeof obj.jitter === "boolean") settings.jitter = obj.jitter;
+          if (typeof obj.jitterPct === "number") {
+            settings.jitterPct = Math.min(50, Math.max(0, Math.round(obj.jitterPct)));
           }
           if (typeof obj.left === "boolean") settings.left = obj.left;
           if (typeof obj.right === "boolean") settings.right = obj.right;
@@ -85,6 +96,16 @@
     return (held[0] && settings.left) || (held[2] && settings.right);
   }
 
+  // 下一次点击的间隔（毫秒）：目标 CPS 为基准，开启跳动则在 ±jitterPct% 内随机
+  function nextInterval() {
+    var base = 1000 / settings.cps;
+    if (settings.jitter && settings.jitterPct > 0) {
+      var r = (Math.random() * 2 - 1) * (settings.jitterPct / 100); // -1~1 * pct
+      return Math.max(1, base * (1 + r));
+    }
+    return base;
+  }
+
   // 向游戏画布派发一次完整的“按下-抬起”点击
   function fireClick(button) {
     var canvas = getCanvas();
@@ -122,8 +143,8 @@
     }
 
     canvas.dispatchEvent(makeEvent("mousedown"));
-    // 按下后短暂保持再抬起，保证游戏能识别为一次完整点击
-    var holdMs = Math.max(1, Math.min(5, Math.round(1000 / settings.cps / 3)));
+    // 按下后短暂保持再抬起，保证游戏能识别为一次完整点击（时长同样跟随跳动）
+    var holdMs = Math.max(1, Math.min(5, Math.round(nextInterval() / 3)));
     setTimeout(function () {
       if (getCanvas() === canvas) {
         canvas.dispatchEvent(makeEvent("mouseup"));
@@ -131,22 +152,22 @@
     }, holdMs);
   }
 
-  // 按当前 CPS 重启连点循环（仅在需要时运行）
+  // 按当前 CPS（含跳动）重启连点循环（仅在需要时运行）
   function refreshClicking() {
     if (intervalId !== null) {
-      clearInterval(intervalId);
+      clearTimeout(intervalId);
       intervalId = null;
     }
     if (!shouldClick()) return;
-    var interval = 1000 / settings.cps;
-    intervalId = setInterval(function () {
+    function tick() {
       if (!shouldClick()) {
-        clearInterval(intervalId);
         intervalId = null;
         return;
       }
       fireClick(held[0] && settings.left ? 0 : 2);
-    }, interval);
+      intervalId = setTimeout(tick, nextInterval());
+    }
+    intervalId = setTimeout(tick, nextInterval());
   }
 
   // ---------- 连点器总开关（V 键调用） ----------
@@ -287,6 +308,44 @@
     rowCps.appendChild(cpsRange);
     rowCps.appendChild(cpsVal);
 
+    // CPS 跳动开关（±随机，更像人手）
+    var rowJitter = document.createElement("div");
+    rowJitter.className = "ac-row";
+    var btnJitter = makeToggleButton("CPS跳动", settings.jitter);
+    btnJitter.addEventListener("click", function () {
+      settings.jitter = !settings.jitter;
+      btnJitter.className = "ac-btn " + (settings.jitter ? "on" : "off");
+      btnJitter.textContent = "CPS跳动：" + (settings.jitter ? "开" : "关");
+      saveSettings();
+      refreshClicking();
+    });
+    rowJitter.appendChild(btnJitter);
+
+    // 跳动幅度 ±1~50%
+    var rowJp = document.createElement("div");
+    rowJp.className = "ac-row";
+    var jpLabel = document.createElement("span");
+    jpLabel.textContent = "±";
+    var jpRange = document.createElement("input");
+    jpRange.type = "range";
+    jpRange.min = "1";
+    jpRange.max = "50";
+    jpRange.step = "1";
+    jpRange.value = settings.jitterPct;
+    var jpVal = document.createElement("span");
+    jpVal.className = "ac-cps";
+    jpVal.textContent = settings.jitterPct + "%";
+    jpRange.addEventListener("input", function () {
+      var v = parseInt(jpRange.value, 10);
+      settings.jitterPct = (isNaN(v) ? 10 : Math.min(50, Math.max(0, v)));
+      jpVal.textContent = settings.jitterPct + "%";
+      saveSettings();
+      refreshClicking();
+    });
+    rowJp.appendChild(jpLabel);
+    rowJp.appendChild(jpRange);
+    rowJp.appendChild(jpVal);
+
     // 左键 / 右键 连点开关
     var rowBtns = document.createElement("div");
     rowBtns.className = "ac-row";
@@ -316,6 +375,8 @@
     panel.appendChild(title);
     panel.appendChild(rowToggle);
     panel.appendChild(rowCps);
+    panel.appendChild(rowJitter);
+    panel.appendChild(rowJp);
     panel.appendChild(rowBtns);
     panel.appendChild(hint);
     document.body.appendChild(panel);
@@ -343,7 +404,7 @@
     fab.id = "ruian-ac-fab";
     fab.type = "button";
     fab.textContent = "AC";
-    fab.title = "连点器设置面板（调 CPS / 左右键；按 | 打开，按 V 直接开关连点器）";
+    fab.title = "连点器设置面板（调 CPS / 跳动 / 左右键；按 | 打开，按 V 直接开关连点器）";
     fab.addEventListener("click", function (ev) {
       if (ev.stopPropagation) ev.stopPropagation();
       togglePanel();
@@ -372,7 +433,7 @@
   window.addEventListener("keydown", function (e) {
     if (e.repeat) return; // 忽略长按重复触发，避免反复开关
     if (isPipeKey(e)) {
-      // | 键：打开 / 关闭参数设置面板（调 CPS、左右键等）
+      // | 键：打开 / 关闭参数设置面板（调 CPS、跳动、左右键等）
       if (e.preventDefault) e.preventDefault();
       if (e.stopImmediatePropagation) e.stopImmediatePropagation();
       console.log("[AutoClicker] 触发按键: key=" + JSON.stringify(e.key) + " keyCode=" + e.keyCode + " code=" + e.code + "（| 键：面板）");
@@ -457,6 +518,17 @@
     setCps: function (v) {
       var n = parseInt(v, 10);
       settings.cps = isNaN(n) ? 12 : Math.min(100, Math.max(1, n));
+      saveSettings();
+      refreshClicking();
+    },
+    setJitter: function (v) {
+      settings.jitter = !!v;
+      saveSettings();
+      refreshClicking();
+    },
+    setJitterPct: function (v) {
+      var n = parseInt(v, 10);
+      settings.jitterPct = isNaN(n) ? 10 : Math.min(50, Math.max(0, n));
       saveSettings();
       refreshClicking();
     },
