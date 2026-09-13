@@ -1,14 +1,11 @@
 /* ============================================================
- * Eaglercraft X ESP + Aim Assist  v1.1  (Ruian Client)
- *  G = 开关碰撞箱ESP    H = 开关辅助瞄准
- *  ESP: 红色玩家碰撞箱线框(0.3 x 1.8 x 0.3), 128格内
- *  自瞄: 准星 aimRange(180px) 内自动吸附敌人视角, 强度 aimStrength(0.25)
- * v1.1 修复:
- *   - 双协议自动识别(1.12.2 与 1.8), 实体表分协议独立统计, 动态选优
- *   - 进站帧格式自适应: 裸包 / VarInt 长度帧两种都试
- *   - 实体坐标合法性过滤(NaN/Infinity/超世界边界丢弃)
- *   - 自瞄防抖: 移动量阈值 + 冷却, 避免视角乱转
- *   - getPacketStats() 返回协议ID计数, 便于排障
+ * Eaglercraft X ESP + Aim Assist  v1.2  (Ruian Client)
+ *  G = ESP开关   H = 自瞄开关   (右上角 ES / AIM 圆钮)
+ * v1.2:
+ *  - 帧格式自适应: 裸包 / VarInt长度帧 / 多包合并, 长度校验+边界检查
+ *  - 双协议自动识别: 1.12.2 与 1.8, 动态选优
+ *  - 坐标合法性过滤 + 自瞄防抖
+ *  - 控制台输出加载日志(确认脚本已运行)
  * ============================================================ */
 (function () {
   'use strict';
@@ -18,16 +15,10 @@
   var local = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, known: false };
   var stats = { in: 0, out: 0, parsed: 0, unparsed: 0, ids: {}, proto: 'v112', e112parsed: 0, e18parsed: 0 };
   var overlay = null, ctx = null, rafId = null, aimTimer = null, lastAim = 0;
-  var btnEsp = null, btnAim = null;
+  var btnEsp = null, btnAim = null, booted = false;
   var W = 0, H = 0;
-
-  var ENTITY_TTL = 5000;
-  var MAX_RENDER_DIST = 128;
-  var BOX_W = 0.3, BOX_H = 1.8;
-  var YAW_UNIT = 360 / 256;
-  var WORLD_LIMIT = 3e7;
-
-  // 两套实体表(1.12 与 1.8), 各自统计解析成功数
+  var ENTITY_TTL = 5000, MAX_RENDER_DIST = 128, BOX_W = 0.3, BOX_H = 1.8;
+  var YAW_UNIT = 360 / 256, WORLD_LIMIT = 3e7;
   var P112 = { ents: new Map(), parsed: 0 };
   var P18 = { ents: new Map(), parsed: 0 };
 
@@ -57,8 +48,9 @@
     } catch (e) {}
   }
   function saneCoord(v) { return typeof v === 'number' && isFinite(v) && Math.abs(v) < WORLD_LIMIT; }
+  function log() { try { console.log.apply(console, ['[RuianESP]'].concat([].slice.call(arguments))); } catch (e) {} }
 
-  /* ========== 字节流解析 ========== */
+  /* ===== 字节流 ===== */
   function toBytes(data) {
     if (data instanceof ArrayBuffer) return new Uint8Array(data);
     if (ArrayBuffer.isView(data)) return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
@@ -77,8 +69,6 @@
     return r >>> 0;
   };
   Reader.prototype.byte = function () { return this.o < this.u8.length ? this.u8[this.o++] : 0; };
-  Reader.prototype.ubyte = function () { return this.byte(); };
-  Reader.prototype.bool = function () { return this.byte() !== 0; };
   Reader.prototype.short = function () {
     if (this.o + 2 > this.u8.length) return 0;
     var v = (this.u8[this.o] << 8) | this.u8[this.o + 1];
@@ -106,10 +96,11 @@
   Reader.prototype.skip = function (n) { this.o += n; };
   function byteAngle(b) { return b * YAW_UNIT; }
 
-  /* ========== 实体表操作 ========== */
+  /* ===== 实体表 ===== */
   function setEnt(P, eid, x, y, z, yaw, pitch, type, now) {
-    if (!saneCoord(x) || !saneCoord(y) || !saneCoord(z)) return;
+    if (!saneCoord(x) || !saneCoord(y) || !saneCoord(z)) return false;
     P.ents.set(eid, { x: x, y: y, z: z, yaw: yaw, pitch: pitch, type: type, last: now });
+    return true;
   }
   function moveEnt(P, eid, dx, dy, dz, now, yaw, pitch) {
     var e = P.ents.get(eid);
@@ -130,240 +121,186 @@
     if (e) { e.yaw = yaw; e.last = now; }
   }
   function setLocal(x, y, z, yaw, pitch) {
-    local.x = x; local.y = y; local.z = z;
-    local.yaw = yaw; local.pitch = pitch;
-    local.known = true;
+    if (!saneCoord(x) || !saneCoord(y) || !saneCoord(z)) return;
+    local.x = x; local.y = y; local.z = z; local.yaw = yaw; local.pitch = pitch; local.known = true;
   }
 
-  /* ========== 1.12.2 进站包解析 ========== */
-  function decode112(pkt, r) {
+  /* ===== 1.12.2 进站 ===== */
+  function d112(pkt, r) {
     var now = Date.now(), eid, x, y, z, yaw, pitch, dx, dy, dz, flags;
     switch (pkt) {
-      case 0x05: // SpawnPlayer
+      case 0x05:
         eid = r.varint(); if (eid < 0) return false;
-        r.skip(16); // UUID
-        x = r.double(); y = r.double(); z = r.double();
+        r.skip(16); x = r.double(); y = r.double(); z = r.double();
         yaw = byteAngle(r.byte()); pitch = byteAngle(r.byte());
-        setEnt(P112, eid, x, y, z, yaw, pitch, 'player', now);
-        P112.parsed++;
-        return true;
-      case 0x03: // SpawnMob
+        setEnt(P112, eid, x, y, z, yaw, pitch, 'player', now); P112.parsed++; return true;
+      case 0x03:
         eid = r.varint(); if (eid < 0) return false;
-        r.skip(1); // type
-        x = r.double(); y = r.double(); z = r.double();
-        yaw = byteAngle(r.byte()); pitch = byteAngle(r.byte());
-        r.skip(1); // head pitch
-        setEnt(P112, eid, x, y, z, yaw, pitch, 'mob', now);
-        P112.parsed++;
-        return true;
-      case 0x25: // EntityRelativeMove
+        r.skip(1); x = r.double(); y = r.double(); z = r.double();
+        yaw = byteAngle(r.byte()); pitch = byteAngle(r.byte()); r.skip(1);
+        setEnt(P112, eid, x, y, z, yaw, pitch, 'mob', now); P112.parsed++; return true;
+      case 0x25:
+        eid = r.varint(); if (eid < 0) return false;
+        dx = r.short() / 4096; dy = r.short() / 4096; dz = r.short() / 4096; r.skip(1);
+        moveEnt(P112, eid, dx, dy, dz, now); P112.parsed++; return true;
+      case 0x26:
         eid = r.varint(); if (eid < 0) return false;
         dx = r.short() / 4096; dy = r.short() / 4096; dz = r.short() / 4096;
-        r.skip(1);
-        moveEnt(P112, eid, dx, dy, dz, now);
-        P112.parsed++;
-        return true;
-      case 0x26: // EntityLookAndRelativeMove
+        yaw = byteAngle(r.byte()); pitch = byteAngle(r.byte()); r.skip(1);
+        moveEnt(P112, eid, dx, dy, dz, now, yaw, pitch); P112.parsed++; return true;
+      case 0x27:
         eid = r.varint(); if (eid < 0) return false;
-        dx = r.short() / 4096; dy = r.short() / 4096; dz = r.short() / 4096;
-        yaw = byteAngle(r.byte()); pitch = byteAngle(r.byte());
-        r.skip(1);
-        moveEnt(P112, eid, dx, dy, dz, now, yaw, pitch);
-        P112.parsed++;
-        return true;
-      case 0x27: // EntityLook
+        yaw = byteAngle(r.byte()); pitch = byteAngle(r.byte()); r.skip(1);
+        lookEnt(P112, eid, yaw, pitch, now); P112.parsed++; return true;
+      case 0x36:
         eid = r.varint(); if (eid < 0) return false;
-        yaw = byteAngle(r.byte()); pitch = byteAngle(r.byte());
-        r.skip(1);
-        lookEnt(P112, eid, yaw, pitch, now);
-        P112.parsed++;
-        return true;
-      case 0x36: // EntityHeadLook
-        eid = r.varint(); if (eid < 0) return false;
-        headEnt(P112, byteAngle(r.byte()), now);
-        P112.parsed++;
-        return true;
-      case 0x4C: // EntityTeleport
+        headEnt(P112, byteAngle(r.byte()), now); P112.parsed++; return true;
+      case 0x4C:
         eid = r.varint(); if (eid < 0) return false;
         x = r.double(); y = r.double(); z = r.double();
-        yaw = byteAngle(r.byte()); pitch = byteAngle(r.byte());
-        r.skip(1);
+        yaw = byteAngle(r.byte()); pitch = byteAngle(r.byte()); r.skip(1);
         setEnt(P112, eid, x, y, z, yaw, pitch, P112.ents.has(eid) ? P112.ents.get(eid).type : 'mob', now);
-        P112.parsed++;
-        return true;
-      case 0x32: // DestroyEntities
+        P112.parsed++; return true;
+      case 0x32:
         var n = r.varint();
         for (var i = 0; i < n; i++) { var del = r.varint(); if (del >= 0) P112.ents.delete(del); }
-        P112.parsed++;
-        return true;
-      case 0x2F: // S2C PlayerPosLook -> 本地
-        x = r.double(); y = r.double(); z = r.double();
-        yaw = r.float(); pitch = r.float();
-        flags = r.byte();
-        var nx = local.x, ny = local.y, nz = local.z, nyw = local.yaw, np = local.pitch;
-        if (!(flags & 1)) nx = x;
-        if (!(flags & 2)) ny = y;
-        if (!(flags & 4)) nz = z;
-        if (!(flags & 8)) nyw = yaw;
-        if (!(flags & 16)) np = pitch;
-        if (saneCoord(nx) && saneCoord(ny) && saneCoord(nz)) setLocal(nx, ny, nz, nyw, np);
-        P112.parsed++;
-        return true;
-      default:
-        return false;
+        P112.parsed++; return true;
+      case 0x2F:
+        x = r.double(); y = r.double(); z = r.double(); yaw = r.float(); pitch = r.float(); flags = r.byte();
+        setLocal(!(flags & 1) ? x : local.x, !(flags & 2) ? y : local.y, !(flags & 4) ? z : local.z,
+                 !(flags & 8) ? yaw : local.yaw, !(flags & 16) ? pitch : local.pitch);
+        P112.parsed++; return true;
+      default: return false;
     }
   }
 
-  /* ========== 1.8 进站包解析 ========== */
-  function decode18(pkt, r) {
+  /* ===== 1.8 进站 ===== */
+  function d18(pkt, r) {
     var now = Date.now(), eid, x, y, z, yaw, pitch, dx, dy, dz, flags;
     switch (pkt) {
-      case 0x0C: // SpawnPlayer
+      case 0x0C:
         eid = r.varint(); if (eid < 0) return false;
-        r.skip(16); // UUID
-        x = r.double(); y = r.double(); z = r.double();
-        yaw = byteAngle(r.byte()); pitch = byteAngle(r.byte());
-        r.skip(2); // currentItem
-        setEnt(P18, eid, x, y, z, yaw, pitch, 'player', now);
-        P18.parsed++;
-        return true;
-      case 0x0F: // SpawnMob (int 定点 /32)
+        r.skip(16); x = r.double(); y = r.double(); z = r.double();
+        yaw = byteAngle(r.byte()); pitch = byteAngle(r.byte()); r.skip(2);
+        setEnt(P18, eid, x, y, z, yaw, pitch, 'player', now); P18.parsed++; return true;
+      case 0x0F:
         eid = r.varint(); if (eid < 0) return false;
-        r.skip(1); // type
-        x = r.int() / 32; y = r.int() / 32; z = r.int() / 32;
-        yaw = byteAngle(r.byte()); pitch = byteAngle(r.byte());
-        r.skip(3); // head pitch + velocity
-        setEnt(P18, eid, x, y, z, yaw, pitch, 'mob', now);
-        P18.parsed++;
-        return true;
-      case 0x15: // EntityRelativeMove (byte 定点 /32)
+        r.skip(1); x = r.int() / 32; y = r.int() / 32; z = r.int() / 32;
+        yaw = byteAngle(r.byte()); pitch = byteAngle(r.byte()); r.skip(3);
+        setEnt(P18, eid, x, y, z, yaw, pitch, 'mob', now); P18.parsed++; return true;
+      case 0x15:
         eid = r.varint(); if (eid < 0) return false;
-        dx = r.byte() / 32; dy = r.byte() / 32; dz = r.byte() / 32;
-        r.skip(1);
-        moveEnt(P18, eid, dx, dy, dz, now);
-        P18.parsed++;
-        return true;
-      case 0x16: // EntityLook
+        dx = r.byte() / 32; dy = r.byte() / 32; dz = r.byte() / 32; r.skip(1);
+        moveEnt(P18, eid, dx, dy, dz, now); P18.parsed++; return true;
+      case 0x16:
         eid = r.varint(); if (eid < 0) return false;
-        yaw = byteAngle(r.byte()); pitch = byteAngle(r.byte());
-        r.skip(1);
-        lookEnt(P18, eid, yaw, pitch, now);
-        P18.parsed++;
-        return true;
-      case 0x17: // EntityLookAndRelativeMove
+        yaw = byteAngle(r.byte()); pitch = byteAngle(r.byte()); r.skip(1);
+        lookEnt(P18, eid, yaw, pitch, now); P18.parsed++; return true;
+      case 0x17:
         eid = r.varint(); if (eid < 0) return false;
         dx = r.byte() / 32; dy = r.byte() / 32; dz = r.byte() / 32;
-        yaw = byteAngle(r.byte()); pitch = byteAngle(r.byte());
-        r.skip(1);
-        moveEnt(P18, eid, dx, dy, dz, now, yaw, pitch);
-        P18.parsed++;
-        return true;
-      case 0x18: // EntityTeleport (int 定点 /32)
+        yaw = byteAngle(r.byte()); pitch = byteAngle(r.byte()); r.skip(1);
+        moveEnt(P18, eid, dx, dy, dz, now, yaw, pitch); P18.parsed++; return true;
+      case 0x18:
         eid = r.varint(); if (eid < 0) return false;
         x = r.int() / 32; y = r.int() / 32; z = r.int() / 32;
-        yaw = byteAngle(r.byte()); pitch = byteAngle(r.byte());
-        r.skip(1);
+        yaw = byteAngle(r.byte()); pitch = byteAngle(r.byte()); r.skip(1);
         setEnt(P18, eid, x, y, z, yaw, pitch, P18.ents.has(eid) ? P18.ents.get(eid).type : 'mob', now);
-        P18.parsed++;
-        return true;
-      case 0x19: // EntityHeadLook
+        P18.parsed++; return true;
+      case 0x19:
         eid = r.varint(); if (eid < 0) return false;
-        headEnt(P18, byteAngle(r.byte()), now);
-        P18.parsed++;
-        return true;
-      case 0x13: // DestroyEntities
+        headEnt(P18, byteAngle(r.byte()), now); P18.parsed++; return true;
+      case 0x13:
         var n = r.varint();
         for (var i = 0; i < n; i++) { var del = r.varint(); if (del >= 0) P18.ents.delete(del); }
-        P18.parsed++;
-        return true;
-      case 0x08: // S2C PlayerPosLook -> 本地
-        x = r.double(); y = r.double(); z = r.double();
-        yaw = r.float(); pitch = r.float();
-        flags = r.byte();
-        var nx = local.x, ny = local.y, nz = local.z, nyw = local.yaw, np = local.pitch;
-        if (!(flags & 1)) nx = x;
-        if (!(flags & 2)) ny = y;
-        if (!(flags & 4)) nz = z;
-        if (!(flags & 8)) nyw = yaw;
-        if (!(flags & 16)) np = pitch;
-        if (saneCoord(nx) && saneCoord(ny) && saneCoord(nz)) setLocal(nx, ny, nz, nyw, np);
-        P18.parsed++;
-        return true;
-      default:
-        return false;
+        P18.parsed++; return true;
+      case 0x08:
+        x = r.double(); y = r.double(); z = r.double(); yaw = r.float(); pitch = r.float(); flags = r.byte();
+        setLocal(!(flags & 1) ? x : local.x, !(flags & 2) ? y : local.y, !(flags & 4) ? z : local.z,
+                 !(flags & 8) ? yaw : local.yaw, !(flags & 16) ? pitch : local.pitch);
+        P18.parsed++; return true;
+      default: return false;
     }
   }
 
-  /* ========== 进站消息: 帧格式自适应 ========== */
-  function feedIncoming(data) {
-    var u8 = toBytes(data);
-    if (!u8 || !u8.length) return;
-    stats.in++;
-    var first = (new Reader(u8)).varint();
-    if (first < 0) return;
-    var ok = tryDecode(first, new Reader(u8));
-    if (!ok && first > 0x1A) {
-      // 可能是 VarInt 长度帧: 跳过长度, 再读包ID
-      var r2 = new Reader(u8);
-      r2.varint();
-      var pkt = r2.varint();
-      if (pkt >= 0) tryDecode(pkt, r2);
-    }
-  }
+  /* ===== 进站: 帧格式自适应(裸包/长度帧/多包) ===== */
   function tryDecode(pkt, r) {
-    var a = decode112(pkt, r);
-    var b = decode18(pkt, r);
-    if (a || b) {
-      stats.parsed++;
-      return true;
-    }
+    var a = d112(pkt, r);
+    var b = d18(pkt, r);
+    if (a || b) { stats.parsed++; return true; }
     stats.unparsed++;
     stats.ids[pkt] = (stats.ids[pkt] || 0) + 1;
     return false;
   }
+  function feedIncoming(data) {
+    var u8 = toBytes(data);
+    if (!u8 || !u8.length) return;
+    stats.in++;
+    var off = 0, guard = 0;
+    while (off < u8.length && guard++ < 32) {
+      var r0 = new Reader(u8); r0.o = off;
+      var first = r0.varint();
+      if (first < 0) break;
+      var lenBytes = r0.o - off;
+      var remaining = u8.length - r0.o;
+      var handled = false;
+      // 尝试长度帧: first=payload长度, 包ID在长度之后
+      if (first >= 1 && first <= remaining) {
+        var rF = new Reader(u8); rF.o = r0.o;
+        var pktF = rF.varint();
+        if (pktF >= 0 && rF.o <= off + lenBytes + first) {
+          var okF = tryDecode(pktF, rF);
+          if (okF && rF.o <= off + lenBytes + first) {
+            handled = true;
+            off = r0.o + first;
+            continue;
+          }
+        }
+      }
+      // 尝试裸包: first=包ID
+      if (!handled && first <= 0x50) {
+        var rB = new Reader(u8); rB.o = off;
+        if (tryDecode(first, rB)) {
+          handled = true;
+          off = u8.length;
+          break;
+        }
+      }
+      if (!handled) {
+        stats.unparsed++;
+        stats.ids[first] = (stats.ids[first] || 0) + 1;
+        break;
+      }
+    }
+  }
 
-  /* ========== 出站包解析 (C->S, 更新本地; 1.8/1.12 相同 ID) ========== */
+  /* ===== 出站: 更新本地 ===== */
   function feedOutgoing(data) {
     var u8 = toBytes(data);
     if (!u8 || !u8.length) return;
     stats.out++;
-    var first = 0, pkt = 0, r;
     var r0 = new Reader(u8);
-    first = r0.varint();
+    var first = r0.varint();
     if (first < 0) return;
-    if (first > 0x1A) {
-      r = new Reader(u8);
-      r.varint();
-      pkt = r.varint();
-      if (pkt < 0) return;
-    } else {
-      r = new Reader(u8);
-      pkt = r.varint();
-    }
+    var pkt = first, r = r0;
+    if (first > 0x1A) { r = new Reader(u8); r.varint(); pkt = r.varint(); if (pkt < 0) return; }
     var x, y, z, yaw, pitch;
     switch (pkt) {
-      case 0x03: // Player
-        break;
-      case 0x04: // PlayerPosition
+      case 0x04:
         x = r.double(); y = r.double(); z = r.double();
         if (saneCoord(x) && saneCoord(y) && saneCoord(z)) { local.x = x; local.y = y; local.z = z; local.known = true; }
         break;
-      case 0x05: // PlayerLook
-        yaw = r.float(); pitch = r.float();
-        local.yaw = yaw; local.pitch = pitch;
-        break;
-      case 0x06: // PlayerPositionAndLook
-        x = r.double(); y = r.double(); z = r.double();
-        yaw = r.float(); pitch = r.float();
+      case 0x05:
+        yaw = r.float(); pitch = r.float(); local.yaw = yaw; local.pitch = pitch; break;
+      case 0x06:
+        x = r.double(); y = r.double(); z = r.double(); yaw = r.float(); pitch = r.float();
         if (saneCoord(x) && saneCoord(y) && saneCoord(z)) { local.x = x; local.y = y; local.z = z; }
-        local.yaw = yaw; local.pitch = pitch; local.known = true;
-        break;
-      default:
-        break;
+        local.yaw = yaw; local.pitch = pitch; local.known = true; break;
+      default: break;
     }
   }
 
-  /* ========== WebSocket Hook ========== */
+  /* ===== WebSocket Hook ===== */
   function hookWS() {
     if (window.__ruianEspHooked) return;
     window.__ruianEspHooked = true;
@@ -395,36 +332,21 @@
     } catch (e) {}
   }
 
-  /* ========== 3D -> 2D 投影 ========== */
+  /* ===== 投影 ===== */
   function getFovRad() {
     var fovDeg = 70;
     try {
       var raw = localStorage.getItem('_eaglercraft_1.12.g');
       if (raw) {
-        try {
-          var bin = atob(raw);
-          // 存储为 base64(GZIP(文本)): 尽力解压, 失败则按明文尝试
-          try {
-            if (window.DecompressionStream) {
-              var ds = new DecompressionStream('gzip');
-              var stream = new Blob([bin]).stream().pipeThrough(ds);
-              var reader = stream.getReader();
-              // 同步解压不可行, 放弃该路径, 用明文正则
-            }
-          } catch (e3) {}
-          var m = bin.match(/(?:^|\n)fov:([-\d.]+)/);
-          if (m) fovDeg = 70 + parseFloat(m[1]) * 40;
-        } catch (e2) {}
+        var m = atob(raw).match(/(?:^|\n)fov:([-\d.]+)/);
+        if (m) fovDeg = 70 + parseFloat(m[1]) * 40;
       }
     } catch (e) {}
     return fovDeg * Math.PI / 180;
   }
   function basis() {
-    var yaw = local.yaw * Math.PI / 180;
-    var pitch = local.pitch * Math.PI / 180;
-    var fx = -Math.sin(yaw) * Math.cos(pitch);
-    var fy = Math.sin(pitch);
-    var fz = -Math.cos(yaw) * Math.cos(pitch);
+    var yaw = local.yaw * Math.PI / 180, pitch = local.pitch * Math.PI / 180;
+    var fx = -Math.sin(yaw) * Math.cos(pitch), fy = Math.sin(pitch), fz = -Math.cos(yaw) * Math.cos(pitch);
     var rx = -fz, rz = fx;
     var ux = -fx * fy, uy = fx * fx + fz * fz, uz = -fz * fy;
     var tanHalf = Math.tan(getFovRad() / 2);
@@ -451,9 +373,7 @@
     if (!c) return null;
     var b = basis();
     var scale = 1 / (c.depth * b.tanHalf);
-    var x0 = ent.x - BOX_W, x1 = ent.x + BOX_W;
-    var y0 = ent.y, y1 = ent.y + BOX_H;
-    var z0 = ent.z - BOX_W, z1 = ent.z + BOX_W;
+    var x0 = ent.x - BOX_W, x1 = ent.x + BOX_W, y0 = ent.y, y1 = ent.y + BOX_H, z0 = ent.z - BOX_W, z1 = ent.z + BOX_W;
     var corners = [[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1],
                    [x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1]];
     var out = [];
@@ -467,15 +387,13 @@
     }
     return out;
   }
-
-  /* ========== 当前活跃实体表(协议自动选优) ========== */
   function activeEnts() {
     if (P18.parsed > P112.parsed) { stats.proto = 'v18'; return P18.ents; }
     stats.proto = 'v112';
     return P112.ents;
   }
 
-  /* ========== 渲染 ========== */
+  /* ===== 渲染 ===== */
   function ensureOverlay() {
     if (overlay && overlay.isConnected) return;
     overlay = document.createElement('canvas');
@@ -503,7 +421,7 @@
       if (now - ent.last > ENTITY_TTL) { ents.delete(id); return; }
       if (ent.type === 'mob' && !settings.drawMobs) return;
       var dx = ent.x - local.x, dy = ent.y - local.y, dz = ent.z - local.z;
-      if (Math.sqrt(dx * dx + dy * dy + dz * dz) < 0.5) return; // 跳过自己
+      if (Math.sqrt(dx * dx + dy * dy + dz * dz) < 0.5) return;
       var p = boxPoints(ent);
       if (!p) return;
       line(p[0], p[1]); line(p[1], p[2]); line(p[2], p[3]); line(p[3], p[0]);
@@ -512,20 +430,17 @@
     });
     ctx.shadowBlur = 0;
     function line(a, b) {
-      ctx.beginPath();
-      ctx.moveTo(a.sx, a.sy);
-      ctx.lineTo(b.sx, b.sy);
-      ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(a.sx, a.sy); ctx.lineTo(b.sx, b.sy); ctx.stroke();
     }
   }
 
-  /* ========== 辅助瞄准(防抖) ========== */
+  /* ===== 自瞄(防抖) ===== */
   function aimTick() {
     if (!settings.aim || !document.pointerLockElement) return;
     var c = getCanvas();
     if (!c) return;
     var now = Date.now();
-    if (now - lastAim < 80) return; // 冷却, 防乱转
+    if (now - lastAim < 80) return;
     var ents = activeEnts();
     var best = null, bestDist = settings.aimRange;
     ents.forEach(function (ent, id) {
@@ -539,9 +454,8 @@
       if (d <= bestDist) { bestDist = d; best = { ox: ox, oy: oy }; }
     });
     if (best) {
-      var mx = -best.ox * settings.aimStrength;
-      var my = -best.oy * settings.aimStrength;
-      if (Math.abs(mx) < 0.5 && Math.abs(my) < 0.5) return; // 已在准星附近, 不抖
+      var mx = -best.ox * settings.aimStrength, my = -best.oy * settings.aimStrength;
+      if (Math.abs(mx) < 0.5 && Math.abs(my) < 0.5) return;
       try {
         var ev = new MouseEvent('mousemove', { bubbles: true, cancelable: true, movementX: mx, movementY: my });
         ev.isAutoClick = true;
@@ -551,7 +465,7 @@
     }
   }
 
-  /* ========== 按键 & UI ========== */
+  /* ===== 按键 & UI ===== */
   function onKey(e) {
     if (e.isAutoClick) return;
     var t = e.target;
@@ -582,7 +496,7 @@
     if (btnAim) btnAim.style.background = settings.aim ? '#ffa500' : '#555';
   }
 
-  /* ========== 启动 ========== */
+  /* ===== 启动 ===== */
   function init() {
     hookWS();
     btnEsp = makeBtn(88, 'ES');
@@ -606,6 +520,8 @@
     document.addEventListener('keydown', onKey, true);
     render();
     aimTimer = setInterval(aimTick, 50);
+    booted = true;
+    log('v1.2 loaded OK, esp=' + settings.esp + ' aim=' + settings.aim);
     if (!window.__ruianESP) {
       window.__ruianESP = {
         getSettings: function () { return JSON.parse(JSON.stringify(settings)); },
@@ -625,7 +541,7 @@
           return JSON.parse(JSON.stringify({
             in: stats.in, out: stats.out, parsed: stats.parsed, unparsed: stats.unparsed,
             proto: stats.proto, e112parsed: P112.parsed, e18parsed: P18.parsed,
-            ids: stats.ids, e112count: P112.ents.size, e18count: P18.ents.size
+            ids: stats.ids, e112count: P112.ents.size, e18count: P18.ents.size, booted: booted
           }));
         },
         project: project,
