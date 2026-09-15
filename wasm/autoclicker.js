@@ -1,7 +1,8 @@
 /* ============================================================
- * Eaglercraft X Autoclicker  v1.6  (Ruian Client)
- * 按键:  V = 开关连点器(不弹窗)   | = 打开参数面板
+ * Eaglercraft X Autoclicker  v1.7  (Ruian Client)
+ * 按键:  V = 开关连点器(不弹窗)   | 或 点 AC 圆钮 = 参数面板
  *       长按左键/右键自动连点, CPS 1~100, 支持 CPS 随机跳动
+ * v1.7: AC 圆钮点击改为打开参数面板(CPS 滑块等), 不再只做开关
  * v1.6 修复: 游戏内指针锁定(pointer lock)下长按中途断连
  *   - mousedown/mouseup 只作状态入口, 用 mousemove.buttons 实时
  *     校验收音键物理状态, mouseup 事件丢失不再误停
@@ -146,15 +147,11 @@
     if (btnEl && btnEl.isConnected) return;
     btnEl = document.createElement('div');
     btnEl.textContent = 'AC';
-    btnEl.title = '连点器: 点击开关 (V)';
+    btnEl.title = '连点器: 点击打开设置 (V 开关 / | 面板)';
     btnEl.style.cssText = 'position:fixed;top:8px;right:8px;z-index:2147483646;width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;font:bold 12px/1 sans-serif;color:#fff;cursor:pointer;user-select:none;box-shadow:0 2px 8px rgba(0,0,0,.4);background:' + (settings.enabled ? '#2ecc71' : '#555') + ';';
     btnEl.addEventListener('click', function (e) {
       e.stopPropagation();
-      settings.enabled = !settings.enabled;
-      saveSettings();
-      updateBtn();
-      toast('连点器 ' + (settings.enabled ? '开启' : '关闭'));
-      if (settings.enabled) ensureRunning();
+      togglePanel();
     });
     document.body.appendChild(btnEl);
   }
