@@ -4,7 +4,7 @@
   * {
     cursor: url('67.png'), auto !important;
   }
-
+		
 </style>
 	<head>
 		<meta charset="UTF-8" />
@@ -20,14 +20,14 @@
 		<meta property="og:title" content="Eaglercraft 1.12 WASM-GC" />
 		<meta property="og:description" content="test directory HTML page" />
 		<link type="image/png" rel="shortcut icon" href="7878.png" />
-
-		<script type="text/javascript" src="perfmod.js?v=3.1"></script>
-	
-        <script type="text/javascript" src="autoclicker.js?v=1.6"></script>
-		
-        <script type="text/javascript" src="esp.js?v=1.3"></script>
-
-		<script type="text/javascript" src="preset.js?v=1.3"></script>
+		<!-- EaglerBoost 性能增强 Mod：必须在 eagruntime.js 之前加载 -->
+		<script type="text/javascript" src="perfmod.js?v=3.0"></script>
+		<!-- Ruian AutoClicker 连点器 Mod：必须在 eagruntime.js 之前加载 -->
+		<script type="text/javascript" src="autoclicker.js?v=1.7"></script>
+		<!-- Ruian ESP + Aim  Mod：必须在 eagruntime.js 之前加载 -->
+		<script type="text/javascript" src="esp.js?v=1.3"></script>
+		<!-- Ruian 首次启动设置预设：必须在 eagruntime.js 之前加载 -->
+		<script type="text/javascript" src="preset.js?v=1.0"></script>
 		<script type="text/javascript">
 			"use strict";
 			window.addEventListener("load", async function() {
@@ -42,7 +42,7 @@
 					splash.style.imageRendering = "pixelated";
 					splash.style.background = "center / contain no-repeat url(splash.png), 0px 0px / 1000000% 1000000% no-repeat url(splash.png) white";
 					document.body.appendChild(splash);
-
+				
 					console.log("Downloading assets.epk...");
 					var assetsEPK;
 					try {
@@ -54,7 +54,7 @@
 						return;
 					}
 					console.log("Downloaded " + assetsEPK.length + " byte file");
-
+					
 					const relayId = Math.floor(Math.random() * 3);
 					const eaglercraftXOpts = {
 						demoMode: false,
@@ -69,17 +69,15 @@
 							{ addr: "wss://relay.shhnowisnottheti.me/", comment: "ayunami relay #1", primary: relayId === 2 }
 						]
 					};
-
 					// EaglerBoost 性能增强 Mod：注入优化选项与设置钩子
 					if(typeof window.__eaglerBoostApply === "function") {
 						window.__eaglerBoostApply(eaglercraftXOpts);
 					}
-
 					// Ruian 首次启动设置：必须在 EaglerBoost 写入之后调用，避免被其覆盖
 					if(typeof window.__eaglerPresetApply === "function") {
 						window.__eaglerPresetApply();
 					}
-
+					
 					window.__eaglercraftXLoaderContext = {
 						getEaglercraftXOpts: function() {
 							return eaglercraftXOpts;
@@ -99,8 +97,8 @@
 						getEPKFiles: function() {
 							return [{
 								name: "assets.epk",
-							path: "",
-							data: assetsEPK
+								path: "",
+								data: assetsEPK
 							}];
 						},
 						getRootElement: function() {
@@ -127,14 +125,13 @@
 							setTimeout(fn, 10);
 						}
 					};
-
 					var q = window.location.search;
 					if((typeof q === "string") && q[0] === "?" && (typeof URLSearchParams !== "undefined")) {
 						q = new URLSearchParams(q);
 						var s = q.get("server");
 						if(s) eaglercraftXOpts.joinServer = s;
 					}
-
+					
 					const scriptElement = document.createElement("script");
 					scriptElement.type = "text/javascript";
 					scriptElement.src = "eagruntime.js?v=2.0.3";
