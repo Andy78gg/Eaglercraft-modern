@@ -1,9 +1,10 @@
 /* ============================================================
- * Eaglercraft X Autoclicker  v1.8  (Ruian Client)
+ * Eaglercraft X Autoclicker  v1.9  (Ruian Client)
  * 按键:  V = 开关连点器(不弹窗)   | 或 点 AC 圆钮 = 参数面板
  *       长按左键/右键自动连点, CPS 1~100, 支持 CPS 随机跳动
- * v1.8: AC 圆钮旁新增 [-] [CPS] [+] 加减按钮, 直接点按调节 CPS,
- *       长按持续连加/连减, 无需打开面板
+ * v1.9: CPS 加减按钮移入 | 面板( [-] [CPS] [+] 按钮组 + 滑块),
+ *       不再常驻屏幕, 按 | 或点 AC 圆钮即可调节
+ * v1.8: AC 圆钮旁新增 [-] [CPS] [+] 加减按钮
  * v1.7: AC 圆钮点击改为打开参数面板(CPS 滑块等), 不再只做开关
  * v1.6 修复: 游戏内指针锁定(pointer lock)下长按中途断连
  *   - mousedown/mouseup 只作状态入口, 用 mousemove.buttons 实时
@@ -19,7 +20,7 @@
   var timer = null;                    // setTimeout 句柄(自调度, 不用 setInterval)
   var panelEl = null;
   var btnEl = null;
-  var cpsMinusEl = null, cpsPlusEl = null, cpsValEl = null;
+  var panelCpsValEl = null;            // 面板里的 CPS 数值显示
   var cpsHoldTimer = null;
   var canvas = null;
 
@@ -163,12 +164,12 @@
     if (btnEl && btnEl.isConnected) btnEl.style.background = settings.enabled ? '#2ecc71' : '#555';
   }
 
-  /* ---------- CPS 加减按钮 (v1.8) ---------- */
+  /* ---------- CPS 调节 (面板内) ---------- */
   function adjustCps(delta) {
     settings.cps = clamp(settings.cps + delta, 1, 100);
     saveSettings();
-    updateCpsUi();
     toast('CPS ' + settings.cps);
+    if (panelCpsValEl && panelCpsValEl.isConnected) panelCpsValEl.textContent = settings.cps;
   }
   function stopCpsHold() {
     if (cpsHoldTimer) { clearInterval(cpsHoldTimer); cpsHoldTimer = null; }
@@ -181,36 +182,30 @@
   function makeCpsBtn(label, delta) {
     var b = document.createElement('div');
     b.textContent = label;
-    b.style.cssText = 'width:24px;height:34px;border-radius:6px;display:flex;align-items:center;justify-content:center;font:bold 15px/1 sans-serif;color:#fff;cursor:pointer;user-select:none;box-shadow:0 2px 6px rgba(0,0,0,.4);background:#444;';
+    b.style.cssText = 'width:26px;height:26px;border-radius:6px;display:flex;align-items:center;justify-content:center;font:bold 16px/1 sans-serif;color:#fff;cursor:pointer;user-select:none;background:#444;box-shadow:0 1px 4px rgba(0,0,0,.4);';
     b.addEventListener('mousedown', function (e) {
       e.preventDefault(); e.stopPropagation();
       holdCps(delta);
     });
     b.addEventListener('mouseup', stopCpsHold);
     b.addEventListener('mouseleave', stopCpsHold);
-    b.addEventListener('mouseenter', function (e) { if (e.buttons) holdCps(delta); });
-    document.body.appendChild(b);
     return b;
   }
-  function makeCpsUi() {
-    if (cpsMinusEl && cpsMinusEl.isConnected) return;
-    var wrap = document.createElement('div');
-    wrap.style.cssText = 'position:fixed;top:8px;right:46px;z-index:2147483646;display:flex;align-items:center;gap:4px;';
-    cpsMinusEl = makeCpsBtn('−', -1);
-    cpsMinusEl.title = '降低 CPS';
-    cpsValEl = document.createElement('div');
-    cpsValEl.style.cssText = 'min-width:34px;height:34px;border-radius:6px;display:flex;align-items:center;justify-content:center;font:bold 12px/1 sans-serif;color:#fff;background:#222;box-shadow:inset 0 0 0 1px #444;';
-    cpsValEl.title = '当前 CPS';
-    cpsPlusEl = makeCpsBtn('+', 1);
-    cpsPlusEl.title = '提高 CPS';
-    updateCpsUi();
-    wrap.appendChild(cpsMinusEl);
-    wrap.appendChild(cpsValEl);
-    wrap.appendChild(cpsPlusEl);
-    document.body.appendChild(wrap);
-  }
-  function updateCpsUi() {
-    if (cpsValEl && cpsValEl.isConnected) cpsValEl.textContent = settings.cps;
+  function cpsRow() {
+    var r = document.createElement('div');
+    r.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin:8px 0;';
+    var l = document.createElement('span'); l.textContent = 'CPS 速度'; l.style.color = '#ccc';
+    var grp = document.createElement('div');
+    grp.style.cssText = 'display:flex;align-items:center;gap:6px;';
+    var v = document.createElement('span');
+    v.style.cssText = 'min-width:30px;text-align:center;color:#fff;font-weight:bold;font-size:14px;';
+    panelCpsValEl = v;
+    v.textContent = settings.cps;
+    grp.appendChild(makeCpsBtn('−', -1));
+    grp.appendChild(v);
+    grp.appendChild(makeCpsBtn('+', 1));
+    r.appendChild(l); r.appendChild(grp);
+    return r;
   }
 
   /* ---------- 参数面板 ---------- */
@@ -227,6 +222,7 @@
       updateBtn();
       toast('连点器 ' + (v ? '开启' : '关闭'));
     })));
+    panelEl.appendChild(cpsRow());
     panelEl.appendChild(slider('CPS 速度', 'cps', 1, 100, 1, '次/秒'));
     panelEl.appendChild(row('左键连点', toggle('left')));
     panelEl.appendChild(row('右键连点', toggle('right')));
@@ -276,7 +272,7 @@
       settings[key] = parseInt(inp.value, 10);
       val.textContent = settings[key] + (unit || '');
       saveSettings();
-      updateCpsUi();
+      if (key === 'cps' && panelCpsValEl && panelCpsValEl.isConnected) panelCpsValEl.textContent = settings.cps;
     });
     wrap.appendChild(head); wrap.appendChild(inp);
     return wrap;
@@ -285,7 +281,6 @@
   /* ---------- 启动 ---------- */
   function init() {
     makeBtn();
-    makeCpsUi();
     updateBtn();
     document.addEventListener('mousedown', onMouseDown, true);
     document.addEventListener('mouseup', onMouseUp, true);
@@ -297,10 +292,10 @@
     if (!window.__ruianAutoClicker) {
       window.__ruianAutoClicker = {
         getSettings: function () { return JSON.parse(JSON.stringify(settings)); },
-        setSettings: function (o) { Object.assign(settings, o); saveSettings(); updateBtn(); updateCpsUi(); return settings; },
+        setSettings: function (o) { Object.assign(settings, o); saveSettings(); updateBtn(); return settings; },
         toggle: function () { settings.enabled = !settings.enabled; saveSettings(); updateBtn(); if (!settings.enabled) stop(); return settings.enabled; },
         setEnabled: function (v) { settings.enabled = !!v; saveSettings(); updateBtn(); if (!settings.enabled) stop(); return settings.enabled; },
-        setCps: function (v) { settings.cps = clamp(+v || 12, 1, 100); saveSettings(); updateCpsUi(); return settings.cps; },
+        setCps: function (v) { settings.cps = clamp(+v || 12, 1, 100); saveSettings(); if (panelCpsValEl && panelCpsValEl.isConnected) panelCpsValEl.textContent = settings.cps; return settings.cps; },
         click: fireClick,
         isRunning: function () { return !!timer; },
         openPanel: togglePanel
