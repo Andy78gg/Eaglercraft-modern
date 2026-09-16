@@ -1,11 +1,15 @@
 /* ============================================================
- * Eaglercraft X ESP + Aim Assist  v1.3  (Ruian Client)
+ * Eaglercraft X ESP + Aim Assist  v1.4  (Ruian Client)
  *  G = ESP开关   H = 自瞄开关   (右上角 ES / AIM 圆钮)
- * v1.3 fixes:
- *  - 出站包ID修正: 1.12.2 位置/视角包为 0x0D/0x0E/0x0F
- *    (旧版误用 1.8 的 0x04/0x05/0x06 -> 解析到垃圾坐标污染本地位置)
- *  - 进站 EntityTeleport 修正为 0x4B (旧版误写 0x4C=EntityMetadata)
- *  - 增加 first 字节统计 topIds / 压缩检测, 便于排障
+ * v1.4 fixes (对照 1.12.2 协议逐项核对):
+ *  - 出站包 0x0E=PlayerPositionAndRotation(x,y,z,yaw,pitch)
+ *    0x0F=PlayerRotation(仅yaw,pitch); 旧版把 0x0F 当坐标包读
+ *    导致转头时本地坐标被垃圾值污染 -> 红框乱飞/屏幕乱转
+ *  - 进站 DestroyEntities 修正为 0x31 (旧版误写 0x32)
+ *    0x32 实际是 RemoveEntityEffect, 误解析会读穿包边界并疯狂误删实体
+ *  - 进站 EntityHeadLook 修正为 0x35 (旧版误写 0x36)
+ *  - SpawnMob 补读 UUID(16B)+type, 旧版漏读导致怪物坐标错位
+ *  - 包解析增加边界限制, 防止误读串包
  * ============================================================ */
 (function () {
   'use strict';
@@ -50,17 +54,17 @@
   function saneCoord(v) { return typeof v === 'number' && isFinite(v) && Math.abs(v) < WORLD_LIMIT; }
   function log() { try { console.log.apply(console, ['[RuianESP]'].concat([].slice.call(arguments))); } catch (e) {} }
 
-  /* ===== 字节流 ===== */
+  /* ===== 字节流(带边界) ===== */
   function toBytes(data) {
     if (data instanceof ArrayBuffer) return new Uint8Array(data);
     if (ArrayBuffer.isView(data)) return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
     return null;
   }
-  function Reader(u8) { this.u8 = u8; this.o = 0; }
+  function Reader(u8, max) { this.u8 = u8; this.o = 0; this.max = (max === undefined) ? u8.length : max; }
   Reader.prototype.varint = function () {
     var r = 0, s = 0, b;
     do {
-      if (this.o >= this.u8.length) return -1;
+      if (this.o >= this.max) return -1;
       b = this.u8[this.o++];
       r |= (b & 0x7f) << s;
       s += 7;
@@ -68,27 +72,27 @@
     } while (b & 0x80);
     return r >>> 0;
   };
-  Reader.prototype.byte = function () { return this.o < this.u8.length ? this.u8[this.o++] : 0; };
+  Reader.prototype.byte = function () { return this.o < this.max ? this.u8[this.o++] : 0; };
   Reader.prototype.short = function () {
-    if (this.o + 2 > this.u8.length) return 0;
+    if (this.o + 2 > this.max) return 0;
     var v = (this.u8[this.o] << 8) | this.u8[this.o + 1];
     this.o += 2;
     return v > 0x7fff ? v - 0x10000 : v;
   };
   Reader.prototype.int = function () {
-    if (this.o + 4 > this.u8.length) return 0;
+    if (this.o + 4 > this.max) return 0;
     var v = new DataView(this.u8.buffer, this.u8.byteOffset + this.o, 4).getInt32(0, false);
     this.o += 4;
     return v;
   };
   Reader.prototype.float = function () {
-    if (this.o + 4 > this.u8.length) return 0;
+    if (this.o + 4 > this.max) return 0;
     var v = new DataView(this.u8.buffer, this.u8.byteOffset + this.o, 4).getFloat32(0, false);
     this.o += 4;
     return v;
   };
   Reader.prototype.double = function () {
-    if (this.o + 8 > this.u8.length) return 0;
+    if (this.o + 8 > this.max) return 0;
     var v = new DataView(this.u8.buffer, this.u8.byteOffset + this.o, 8).getFloat64(0, false);
     this.o += 8;
     return v;
@@ -135,9 +139,10 @@
         r.skip(16); x = r.double(); y = r.double(); z = r.double();
         yaw = byteAngle(r.byte()); pitch = byteAngle(r.byte());
         setEnt(P112, eid, x, y, z, yaw, pitch, 'player', now); P112.parsed++; return true;
-      case 0x03: /* SpawnMob */
+      case 0x03: /* SpawnMob: eid + UUID(16) + type(VarInt) + x,y,z + yaw,pitch,headPitch */
         eid = r.varint(); if (eid < 0) return false;
-        r.skip(1); x = r.double(); y = r.double(); z = r.double();
+        r.skip(16); r.varint();
+        x = r.double(); y = r.double(); z = r.double();
         yaw = byteAngle(r.byte()); pitch = byteAngle(r.byte()); r.skip(1);
         setEnt(P112, eid, x, y, z, yaw, pitch, 'mob', now); P112.parsed++; return true;
       case 0x25: /* EntityRelativeMove */
@@ -153,7 +158,7 @@
         eid = r.varint(); if (eid < 0) return false;
         yaw = byteAngle(r.byte()); pitch = byteAngle(r.byte()); r.skip(1);
         lookEnt(P112, eid, yaw, pitch, now); P112.parsed++; return true;
-      case 0x36: /* EntityHeadLook */
+      case 0x35: /* EntityHeadLook (1.12.2) */
         eid = r.varint(); if (eid < 0) return false;
         headEnt(P112, eid, byteAngle(r.byte()), now); P112.parsed++; return true;
       case 0x4B: /* EntityTeleport (1.12.2) */
@@ -162,7 +167,7 @@
         yaw = byteAngle(r.byte()); pitch = byteAngle(r.byte()); r.skip(1);
         setEnt(P112, eid, x, y, z, yaw, pitch, P112.ents.has(eid) ? P112.ents.get(eid).type : 'mob', now);
         P112.parsed++; return true;
-      case 0x32: /* DestroyEntities */
+      case 0x31: /* DestroyEntities (1.12.2) */
         var n = r.varint();
         for (var i = 0; i < n; i++) { var del = r.varint(); if (del >= 0) P112.ents.delete(del); }
         P112.parsed++; return true;
@@ -224,7 +229,7 @@
     }
   }
 
-  /* ===== 进站: 帧格式自适应(裸包/长度帧) ===== */
+  /* ===== 进站: 帧格式自适应(裸包/长度帧), 带包边界 ===== */
   function tryDecode(pkt, r) {
     var a = d112(pkt, r);
     var b = d18(pkt, r);
@@ -244,19 +249,19 @@
       var r0 = new Reader(u8); r0.o = off;
       var f = r0.varint();
       if (f < 0) break;
-      var lenBytes = r0.o - off;
       var remaining = u8.length - r0.o;
       var handled = false;
       // 尝试长度帧: first=payload长度, 包ID在长度之后
       if (f >= 1 && f <= remaining && f < 0x10000) {
-        var rF = new Reader(u8); rF.o = r0.o;
+        var end = r0.o + f;
+        var rF = new Reader(u8, end); rF.o = r0.o;
         var pktF = rF.varint();
-        if (pktF >= 0 && pktF <= 0x60 && rF.o - off + f <= u8.length) {
-          var rF2 = new Reader(u8); rF2.o = r0.o;
+        if (pktF >= 0 && pktF <= 0x60 && rF.o <= end) {
+          var rF2 = new Reader(u8, end); rF2.o = r0.o;
           var okF = tryDecode(pktF, rF2);
-          if (okF && rF2.o <= r0.o + f) {
+          if (okF && rF2.o <= end) {
             handled = true;
-            off = r0.o + f;
+            off = end;
             continue;
           }
         }
@@ -295,23 +300,23 @@
         x = r.double(); y = r.double(); z = r.double();
         if (saneCoord(x) && saneCoord(y) && saneCoord(z)) { local.x = x; local.y = y; local.z = z; local.known = true; stats.localOk = true; }
         break;
-      case 0x0E: /* PlayerLook */
-        yaw = r.float(); pitch = r.float(); local.yaw = yaw; local.pitch = pitch; break;
-      case 0x0F: /* PlayerPositionAndLook */
+      case 0x0E: /* PlayerPositionAndRotation */
         x = r.double(); y = r.double(); z = r.double(); yaw = r.float(); pitch = r.float();
         if (saneCoord(x) && saneCoord(y) && saneCoord(z)) { local.x = x; local.y = y; local.z = z; }
         local.yaw = yaw; local.pitch = pitch; local.known = true; stats.localOk = true; break;
+      case 0x0F: /* PlayerRotation */
+        yaw = r.float(); pitch = r.float(); local.yaw = yaw; local.pitch = pitch; break;
       /* --- 1.8 --- */
       case 0x04: /* PlayerPosition */
         x = r.double(); y = r.double(); z = r.double();
         if (saneCoord(x) && saneCoord(y) && saneCoord(z)) { local.x = x; local.y = y; local.z = z; local.known = true; stats.localOk = true; }
         break;
-      case 0x05: /* PlayerLook */
-        yaw = r.float(); pitch = r.float(); local.yaw = yaw; local.pitch = pitch; break;
-      case 0x06: /* PlayerPositionAndLook */
+      case 0x05: /* PlayerPositionAndRotation */
         x = r.double(); y = r.double(); z = r.double(); yaw = r.float(); pitch = r.float();
         if (saneCoord(x) && saneCoord(y) && saneCoord(z)) { local.x = x; local.y = y; local.z = z; }
         local.yaw = yaw; local.pitch = pitch; local.known = true; stats.localOk = true; break;
+      case 0x06: /* PlayerRotation */
+        yaw = r.float(); pitch = r.float(); local.yaw = yaw; local.pitch = pitch; break;
       default: break;
     }
   }
@@ -537,7 +542,7 @@
     render();
     aimTimer = setInterval(aimTick, 50);
     booted = true;
-    log('v1.3 loaded OK, esp=' + settings.esp + ' aim=' + settings.aim);
+    log('v1.4 loaded OK, esp=' + settings.esp + ' aim=' + settings.aim);
     if (!window.__ruianESP) {
       window.__ruianESP = {
         getSettings: function () { return JSON.parse(JSON.stringify(settings)); },
