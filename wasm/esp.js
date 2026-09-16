@@ -1,15 +1,17 @@
 /* ============================================================
- * Eaglercraft X ESP + Aim Assist  v1.4  (Ruian Client)
+ * Eaglercraft X ESP + Aim Assist  v1.5  (Ruian Client)
  *  G = ESP开关   H = 自瞄开关   (右上角 ES / AIM 圆钮)
- * v1.4 fixes (对照 1.12.2 协议逐项核对):
- *  - 出站包 0x0E=PlayerPositionAndRotation(x,y,z,yaw,pitch)
- *    0x0F=PlayerRotation(仅yaw,pitch); 旧版把 0x0F 当坐标包读
- *    导致转头时本地坐标被垃圾值污染 -> 红框乱飞/屏幕乱转
- *  - 进站 DestroyEntities 修正为 0x31 (旧版误写 0x32)
- *    0x32 实际是 RemoveEntityEffect, 误解析会读穿包边界并疯狂误删实体
- *  - 进站 EntityHeadLook 修正为 0x35 (旧版误写 0x36)
- *  - SpawnMob 补读 UUID(16B)+type, 旧版漏读导致怪物坐标错位
- *  - 包解析增加边界限制, 防止误读串包
+ * v1.5 fixes (根据用户实测 getPacketStats 数据定位):
+ *  - 协议识别改为"出站包投票": 出站 0x0D/0x0E/0x0F => 1.12.2,
+ *    0x04/0x05/0x06 => 1.8; 不再用进站解析计数(会被 1.8 误解析污染,
+ *    导致 1.12.2 服务器被误判为 1.8, 实体表选错)
+ *  - 解析分流: 判定为 1.12.2 时只跑 1.12.2 解析器, 防止 1.8 解析器
+ *    把 0x0C(BossBar)/0x08(BlockBreak) 等当实体包误解析污染实体表
+ *  - 帧解析核心修复: 长度帧模式下, 包解析失败也按长度推进跳过,
+ *    不再终止整个数据帧 -> 第一个包是不认识的包时,
+ *    后面的实体移动/传送包不再被丢弃(实测解析率 5.8% -> 大幅提升)
+ * v1.4 fixes: 出站 0x0E/0x0F 修正; DestroyEntities=0x31;
+ *             EntityHeadLook=0x35; SpawnMob 补 UUID; 包边界限制
  * ============================================================ */
 (function () {
   'use strict';
@@ -25,6 +27,7 @@
   var YAW_UNIT = 360 / 256, WORLD_LIMIT = 3e7;
   var P112 = { ents: new Map(), parsed: 0 };
   var P18 = { ents: new Map(), parsed: 0 };
+  var protoVote = { v112: 0, v18: 0 };   // 出站包协议投票 (1.12.2 vs 1.8)
 
   function loadSettings() {
     try {
@@ -53,6 +56,11 @@
   }
   function saneCoord(v) { return typeof v === 'number' && isFinite(v) && Math.abs(v) < WORLD_LIMIT; }
   function log() { try { console.log.apply(console, ['[RuianESP]'].concat([].slice.call(arguments))); } catch (e) {} }
+
+  /* ===== 协议判定 (出站投票, 默认 1.12.2) ===== */
+  function useV18() {
+    return protoVote.v18 > protoVote.v112 && protoVote.v18 >= 5;
+  }
 
   /* ===== 字节流(带边界) ===== */
   function toBytes(data) {
@@ -180,7 +188,7 @@
     }
   }
 
-  /* ===== 1.8 进站 ===== */
+  /* ===== 1.8 进站 (仅协议判定为 1.8 时启用) ===== */
   function d18(pkt, r) {
     var now = Date.now(), eid, x, y, z, yaw, pitch, dx, dy, dz;
     switch (pkt) {
@@ -231,9 +239,15 @@
 
   /* ===== 进站: 帧格式自适应(裸包/长度帧), 带包边界 ===== */
   function tryDecode(pkt, r) {
-    var a = d112(pkt, r);
-    var b = d18(pkt, r);
-    if (a || b) { stats.parsed++; return true; }
+    var ok;
+    if (useV18()) {
+      ok = d18(pkt, r);
+      if (ok) stats.e18parsed++;
+    } else {
+      ok = d112(pkt, r);
+      if (ok) stats.e112parsed++;
+    }
+    if (ok) { stats.parsed++; return true; }
     stats.unparsed++;
     stats.ids['0x' + pkt.toString(16)] = (stats.ids['0x' + pkt.toString(16)] || 0) + 1;
     return false;
@@ -245,28 +259,29 @@
     var fb = u8[0];
     if (fb === 0x78) stats.compressed++;
     var off = 0, guard = 0;
-    while (off < u8.length && guard++ < 32) {
+    while (off < u8.length && guard++ < 64) {
       var r0 = new Reader(u8); r0.o = off;
       var f = r0.varint();
       if (f < 0) break;
       var remaining = u8.length - r0.o;
       var handled = false;
-      // 尝试长度帧: first=payload长度, 包ID在长度之后
+      // 长度帧: first=payload长度, 包ID在长度之后
+      // 关键: 无论解析成功与否都按长度推进, 不终止整个数据帧
       if (f >= 1 && f <= remaining && f < 0x10000) {
         var end = r0.o + f;
-        var rF = new Reader(u8, end); rF.o = r0.o;
-        var pktF = rF.varint();
-        if (pktF >= 0 && pktF <= 0x60 && rF.o <= end) {
-          var rF2 = new Reader(u8, end); rF2.o = r0.o;
-          var okF = tryDecode(pktF, rF2);
-          if (okF && rF2.o <= end) {
-            handled = true;
+        if (end <= u8.length) {
+          var rF = new Reader(u8, end); rF.o = r0.o;
+          var pktF = rF.varint();
+          if (pktF >= 0 && pktF <= 0x60 && rF.o <= end) {
+            var rF2 = new Reader(u8, end); rF2.o = r0.o;
+            tryDecode(pktF, rF2);
             off = end;
+            handled = true;
             continue;
           }
         }
       }
-      // 尝试裸包: first=包ID
+      // 裸包 fallback: 整个 message 视为一个包
       if (!handled && f <= 0x60) {
         var rB = new Reader(u8); rB.o = off;
         if (tryDecode(f, rB)) {
@@ -283,7 +298,7 @@
     }
   }
 
-  /* ===== 出站: 更新本地(1.12.2 与 1.8 双套 ID) ===== */
+  /* ===== 出站: 更新本地 + 协议投票 ===== */
   function feedOutgoing(data) {
     var u8 = toBytes(data);
     if (!u8 || !u8.length) return;
@@ -297,25 +312,31 @@
     switch (pkt) {
       /* --- 1.12.2 --- */
       case 0x0D: /* PlayerPosition */
+        protoVote.v112++;
         x = r.double(); y = r.double(); z = r.double();
         if (saneCoord(x) && saneCoord(y) && saneCoord(z)) { local.x = x; local.y = y; local.z = z; local.known = true; stats.localOk = true; }
         break;
       case 0x0E: /* PlayerPositionAndRotation */
+        protoVote.v112++;
         x = r.double(); y = r.double(); z = r.double(); yaw = r.float(); pitch = r.float();
         if (saneCoord(x) && saneCoord(y) && saneCoord(z)) { local.x = x; local.y = y; local.z = z; }
         local.yaw = yaw; local.pitch = pitch; local.known = true; stats.localOk = true; break;
       case 0x0F: /* PlayerRotation */
+        protoVote.v112++;
         yaw = r.float(); pitch = r.float(); local.yaw = yaw; local.pitch = pitch; break;
       /* --- 1.8 --- */
       case 0x04: /* PlayerPosition */
+        protoVote.v18++;
         x = r.double(); y = r.double(); z = r.double();
         if (saneCoord(x) && saneCoord(y) && saneCoord(z)) { local.x = x; local.y = y; local.z = z; local.known = true; stats.localOk = true; }
         break;
       case 0x05: /* PlayerPositionAndRotation */
+        protoVote.v18++;
         x = r.double(); y = r.double(); z = r.double(); yaw = r.float(); pitch = r.float();
         if (saneCoord(x) && saneCoord(y) && saneCoord(z)) { local.x = x; local.y = y; local.z = z; }
         local.yaw = yaw; local.pitch = pitch; local.known = true; stats.localOk = true; break;
       case 0x06: /* PlayerRotation */
+        protoVote.v18++;
         yaw = r.float(); pitch = r.float(); local.yaw = yaw; local.pitch = pitch; break;
       default: break;
     }
@@ -409,7 +430,7 @@
     return out;
   }
   function activeEnts() {
-    if (P18.parsed > P112.parsed) { stats.proto = 'v18'; return P18.ents; }
+    if (useV18()) { stats.proto = 'v18'; return P18.ents; }
     stats.proto = 'v112';
     return P112.ents;
   }
@@ -542,7 +563,7 @@
     render();
     aimTimer = setInterval(aimTick, 50);
     booted = true;
-    log('v1.4 loaded OK, esp=' + settings.esp + ' aim=' + settings.aim);
+    log('v1.5 loaded OK, esp=' + settings.esp + ' aim=' + settings.aim);
     if (!window.__ruianESP) {
       window.__ruianESP = {
         getSettings: function () { return JSON.parse(JSON.stringify(settings)); },
@@ -564,9 +585,10 @@
           stats.topIds = top;
           return JSON.parse(JSON.stringify({
             in: stats.in, out: stats.out, parsed: stats.parsed, unparsed: stats.unparsed,
-            proto: stats.proto, e112parsed: P112.parsed, e18parsed: P18.parsed,
+            proto: stats.proto, e112parsed: stats.e112parsed, e18parsed: stats.e18parsed,
             ids: stats.ids, topIds: top, compressed: stats.compressed, localOk: stats.localOk,
-            local: local, entities: P112.ents.size + P18.ents.size, booted: booted
+            local: local, entities: P112.ents.size + P18.ents.size, booted: booted,
+            vote: { v112: protoVote.v112, v18: protoVote.v18 }
           }));
         },
         project: project,
