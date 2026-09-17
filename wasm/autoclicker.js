@@ -1,10 +1,12 @@
 /* ============================================================
- * Eaglercraft X Autoclicker  v1.10  (Ruian Client)
+ * Eaglercraft X Autoclicker  v1.11  (Ruian Client)
  * 按键:  V = 开关连点器(不弹窗)   | 或 点 AC 圆钮 = 参数面板
  *       长按左键/右键自动连点, CPS 1~100, 支持 CPS 随机跳动
- * v1.10: 修复面板按钮按不了(游戏指针锁定下鼠标点不到按钮 ->
- *        打开面板自动退出锁定); 面板内点击不再误触发连点;
- *        CPS 跳动开关 + 跳动幅度 双控件保持可点
+ * v1.11: 修复旧版面板出现两个"跳动幅度"滑块 + 数值 NaN 的 bug;
+ *        面板只保留一个跳动幅度滑块, CPS 用 [-] [+] 按钮调节;
+ *        加载时输出 [RuianAC] v1.11 日志方便确认版本
+ * v1.10: 修复面板按钮按不了(打开面板自动退出指针锁定);
+ *        面板内点击不再误触发连点
  * v1.9: CPS 加减按钮移入 | 面板( [-] [CPS] [+] 按钮组 + 滑块),
  *       不再常驻屏幕, 按 | 或点 AC 圆钮即可调节
  * v1.8: AC 圆钮旁新增 [-] [CPS] [+] 加减按钮
@@ -31,7 +33,14 @@
   function loadSettings() {
     try {
       var raw = localStorage.getItem(LS_KEY);
-      if (raw) { var o = JSON.parse(raw); if (o && typeof o === 'object') return Object.assign({}, DEFAULTS, o); }
+      if (raw) {
+        var o = JSON.parse(raw);
+        if (o && typeof o === 'object') {
+          // 过滤旧版本留下的 undefined/null 字段, 防止 NaN
+          Object.keys(o).forEach(function (k) { if (o[k] === undefined || o[k] === null) delete o[k]; });
+          return Object.assign({}, DEFAULTS, o);
+        }
+      }
     } catch (e) {}
     return Object.assign({}, DEFAULTS);
   }
@@ -233,11 +242,10 @@
       toast('连点器 ' + (v ? '开启' : '关闭'));
     })));
     panelEl.appendChild(cpsRow());
-    panelEl.appendChild(slider('CPS 速度', 'cps', 1, 100, 1, '次/秒'));
     panelEl.appendChild(row('左键连点', toggle('left')));
     panelEl.appendChild(row('右键连点', toggle('right')));
     panelEl.appendChild(row('CPS 跳动', toggle('jitter')));
-    panelEl.appendChild(slider('跳动幅度', 'jitterPct', 0, 50, 1, '%'));
+    panelEl.appendChild(slider('jitterPct', 0, 50, 1, '跳动幅度', '%'));
     var tip = document.createElement('div');
     tip.style.cssText = 'margin-top:8px;color:#999;font-size:11px;line-height:1.8;';
     tip.innerHTML = 'V 开关连点 · | 此面板<br>长按左/右键自动连点';
@@ -266,17 +274,19 @@
     });
     return b;
   }
-  function slider(key, min, max, step, unit) {
+  function slider(key, min, max, step, label, unit) {
     var wrap = document.createElement('div');
     wrap.style.cssText = 'margin:8px 0;';
     var head = document.createElement('div');
     head.style.cssText = 'display:flex;justify-content:space-between;color:#ccc;';
-    var lab = document.createElement('span'); lab.textContent = unit === '次/秒' ? 'CPS 速度' : '跳动幅度';
-    var val = document.createElement('span'); val.textContent = settings[key] + (unit || '');
+    var lab = document.createElement('span'); lab.textContent = label;
+    // NaN 兜底: 旧版本地设置可能残留非法值
+    var safe = (typeof settings[key] === 'number' && isFinite(settings[key])) ? clamp(settings[key], min, max) : min;
+    var val = document.createElement('span'); val.textContent = safe + (unit || '');
     val.style.color = '#fff'; val.style.fontWeight = 'bold';
     head.appendChild(lab); head.appendChild(val);
     var inp = document.createElement('input');
-    inp.type = 'range'; inp.min = min; inp.max = max; inp.step = step; inp.value = settings[key];
+    inp.type = 'range'; inp.min = min; inp.max = max; inp.step = step; inp.value = safe;
     inp.style.cssText = 'width:100%;margin:4px 0 0;accent-color:#2ecc71;';
     inp.addEventListener('input', function () {
       settings[key] = parseInt(inp.value, 10);
@@ -292,6 +302,7 @@
   function init() {
     makeBtn();
     updateBtn();
+    console.log('[RuianAC] v1.11 loaded OK, enabled=' + settings.enabled + ' cps=' + settings.cps + ' jitter=' + settings.jitterPct + '%');
     document.addEventListener('mousedown', onMouseDown, true);
     document.addEventListener('mouseup', onMouseUp, true);
     document.addEventListener('mousemove', onMouseMove, true);
