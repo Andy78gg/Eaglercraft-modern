@@ -1,7 +1,10 @@
 /* ============================================================
- * Eaglercraft X Autoclicker  v1.9  (Ruian Client)
+ * Eaglercraft X Autoclicker  v1.10  (Ruian Client)
  * 按键:  V = 开关连点器(不弹窗)   | 或 点 AC 圆钮 = 参数面板
  *       长按左键/右键自动连点, CPS 1~100, 支持 CPS 随机跳动
+ * v1.10: 修复面板按钮按不了(游戏指针锁定下鼠标点不到按钮 ->
+ *        打开面板自动退出锁定); 面板内点击不再误触发连点;
+ *        CPS 跳动开关 + 跳动幅度 双控件保持可点
  * v1.9: CPS 加减按钮移入 | 面板( [-] [CPS] [+] 按钮组 + 滑块),
  *       不再常驻屏幕, 按 | 或点 AC 圆钮即可调节
  * v1.8: AC 圆钮旁新增 [-] [CPS] [+] 加减按钮
@@ -96,14 +99,19 @@
   }
 
   /* ---------- 真实鼠标事件 ---------- */
+  function inPanel(t) {
+    return panelEl && panelEl.isConnected && panelEl.contains(t);
+  }
   function onMouseDown(e) {
     if (e.isAutoClick) return;
+    if (inPanel(e.target)) return;   // 点面板按钮不触发连点
     var b = e.button;
     if (b === 0 || b === 2) held[b] = true;
     ensureRunning();
   }
   function onMouseUp(e) {
     if (e.isAutoClick) return;
+    if (inPanel(e.target)) return;
     var b = e.button;
     if (b === 0 || b === 2) held[b] = false;
     if (!anyHeld()) stop();
@@ -211,6 +219,8 @@
   /* ---------- 参数面板 ---------- */
   function togglePanel() {
     if (panelEl && panelEl.isConnected) { panelEl.remove(); panelEl = null; return; }
+    // 打开面板时退出指针锁定: 游戏内鼠标被锁定时点击不到面板按钮
+    try { if (document.pointerLockElement) document.exitPointerLock(); } catch (e) {}
     panelEl = document.createElement('div');
     panelEl.style.cssText = 'position:fixed;top:12px;right:54px;z-index:2147483647;width:260px;background:rgba(18,18,24,.94);color:#eee;border:1px solid #333;border-radius:10px;padding:14px;font:13px/1.5 sans-serif;box-shadow:0 8px 30px rgba(0,0,0,.5);';
     var h = document.createElement('div');
