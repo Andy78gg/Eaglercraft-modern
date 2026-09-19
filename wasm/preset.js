@@ -44,7 +44,7 @@ var FULL_KEY = STORAGE_NAMESPACE + "." + SETTINGS_KEY;
 // 需要强制生效的预设项（每次启动合并覆写）
 var PRESET_KEYS = {
 "fov": "0.5",
-"renderDistance": "6",
+"renderDistance": "9",
 "gamma": "1.0",
 "guiScale": "3",
 "renderClouds": "false",
