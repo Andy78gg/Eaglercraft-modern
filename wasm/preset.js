@@ -1,14 +1,18 @@
 /*!
-* Ruian 首次启动设置预设 (preset.js)  v1.4
+* Ruian 首次启动设置预设 (preset.js)  v1.6
 * ---------------------------------------------
 * 在游戏启动时把用户指定的设置写入游戏设置存储：
 *   localStorage["_eaglercraft_1.12.g"] = base64("key:value" 逐行 UTF-8 文本)
 *
-* v1.4 变更: 渲染距离 9 -> 6
-*   原因: WASM-GC 版在人多/建筑多的服务器上, 渲染距离 9 时区块流式加载
-*   赶不上移动速度, 走到面前还会有一两个方块没加载出来(透明/虚空)。
-*   降到 6 格后同时处理的区块数少一大半, 近处方块秒加载;
-*   远处仍由 LOD(32 格) 补, 不影响观感。
+* v1.6 修复（重要）：
+*   按键绑定的存储键名是 "key.xxx" 而不是 "key_key.xxx"！
+*   （wasm 里只有 key.hotbar.9 / key.modmenu 等字符串，不存在 key_key 前缀；
+*     之前 key_key.xxx 会被游戏 "Skipping bad option" 跳过 → 键位修改一直没生效）
+*
+* v1.5 变更: 渲染距离 6 -> 7（折中）
+*   v1.4 降到 6 后近处流畅了, 但 6 格以外玩家放的建筑不显示(远处空)。
+*   改 7 格: 比 9 流畅(近处不缺方块), 远处建筑可见(7~32 格走 LOD)。
+*   lodStartDistance 同步 8->7, 不留空白带。
 *
 * 格式核实（重要修正 v1.3）：
 *   本仓库 1.12 客户端的 GameSettings 与 Eaglercraft 1.8 不同：
@@ -18,16 +22,16 @@
 *
 * 各项设置（对照 classes.wasm 字符串与官方 1.12.2 源码核实）：
 *   - 视野 FOV: Pro(90°)        → fov:0.5      （存储值=(角度-70)/40，0.5→90°）
-*   - 渲染距离: 6 格             → renderDistance:6
+*   - 渲染距离: 7 格             → renderDistance:7
 *   - 亮度: 拉满(Bright)        → gamma:1.0
 *   - 亮点 Fullbright: 开       → modern_fullbright:true
 *   - GUI 尺寸: 大              → guiScale:3   （0=自动 1=小 2=普通 3=大）
 *   - 云: 关                    → renderClouds:false
-*   - 快捷栏 9 → 左Alt           → key_key.hotbar.9:56     (LWJGL KEY_LMENU=56)
-*   - 快捷栏 8 → Button 4        → key_key.hotbar.8:-97    （鼠标键=-100+按钮号）
-*   - 快捷栏 7 → Button 5        → key_key.hotbar.7:-96
-*   - 保存工具栏激活器 → B        → key_key.saveToolbarActivator:48 (KEY_B=48)
-*   - 自由视角 → 左Ctrl           → key_key.freelook:29    (KEY_LCONTROL=29)
+*   - 快捷栏 9 → 左Alt           → key.hotbar.9:56     (LWJGL KEY_LMENU=56)
+*   - 快捷栏 8 → Button 4        → key.hotbar.8:-97    （鼠标键=-100+按钮号）
+*   - 快捷栏 7 → Button 5        → key.hotbar.7:-96
+*   - 保存工具栏激活器 → B        → key.saveToolbarActivator:48 (KEY_B=48)
+*   - 自由视角 → 左Ctrl           → key.freelook:29    (KEY_LCONTROL=29)
 *
 * 为什么每次启动都执行：
 *   EaglerBoost(perfmod) 在每次启动时都会整体覆写设置键，若只在第一次写入，
@@ -44,22 +48,24 @@ var FULL_KEY = STORAGE_NAMESPACE + "." + SETTINGS_KEY;
 // 需要强制生效的预设项（每次启动合并覆写）
 var PRESET_KEYS = {
 "fov": "0.5",
-"renderDistance": "9",
+"renderDistance": "7",
 "gamma": "1.0",
 "guiScale": "3",
 "renderClouds": "false",
 "modern_fullbright": "true",
-"key_key.hotbar.9": "56",
-"key_key.hotbar.8": "-97",
-"key_key.hotbar.7": "-96",
-"key_key.saveToolbarActivator": "48",
-"key_key.freelook": "29"
+"key.hotbar.9": "56",
+"key.hotbar.8": "-97",
+"key.hotbar.7": "-96",
+"key.saveToolbarActivator": "48",
+"key.freelook": "29"
 };
+// 旧版本写错的键名（key_key.* 前缀），游戏不识别，清掉避免残留
+var CLEAN_KEYS = ["key_key.hotbar.9", "key_key.hotbar.8", "key_key.hotbar.7", "key_key.saveToolbarActivator", "key_key.freelook"];
 // 全量兜底预设：version:1343 + EaglerBoost 28 项 + 上述 11 项（纯文本 base64，无 gzip）。
 // 仅在"现有设置为空或损坏（旧 gzip 乱码）"时使用，保证一次启动后就干净可用。
-// v1.4: 两处 renderDistance 均为 6
+// v1.5: renderDistance 均为 7, lodStartDistance 为 7
 var FULL_PRESET_B64 =
-"dmVyc2lvbjoxMzQzCm1vZGVybl9sb2RSZW5kZXJpbmc6dHJ1ZQptb2Rlcm5fbG9kVmlld0Rpc3RhbmNlOjMyCm1vZGVybl9sb2RTdGFydERpc3RhbmNlOjgKcmVuZGVyRGlzdGFuY2U6NgpvZkNodW5rVXBkYXRlczoxCmNodW5rRml4OnRydWUKZm9nOnRydWUKbW9kZXJuX2VudGl0eUN1bGxpbmc6dHJ1ZQplbnRpdHlTaGFkb3dzOmZhbHNlCm1vZGVybl9zaG93T3duTmFtZXRhZzp0cnVlCm1heEZwczoyNjAKZW5hYmxlVnN5bmM6dHJ1ZQpwYXJ0aWNsZXM6MgphbzowCm1pcG1hcExldmVsczowCmZhbmN5R3JhcGhpY3M6ZmFsc2UKcmVuZGVyQ2xvdWRzOmZhbHNlCm1vZGVybl9ub1JhaW46dHJ1ZQptb2Rlcm5fbm9QYXJ0aWNsZXM6dHJ1ZQptb2Rlcm5fbm9HbGludDpmYWxzZQptb2Rlcm5fYmxvY2tGYWNlQ3VsbGluZzp0cnVlCm1vZGVybl9jaHVua01lc2hPcHRpbWl6YXRpb246dHJ1ZQptb2Rlcm5fY3J5c3RhbE9wdGltaXplcjp0cnVlCm1vZGVybl9lYXRpbmdPcHRpbWl6ZXI6dHJ1ZQptb2Rlcm5fbW90aW9uQmx1cjpmYWxzZQptb2Rlcm5fZnVsbGJyaWdodDp0cnVlCm1vZGVybl90b3RlbUNvdW50ZXI6ZmFsc2UKbW9kZXJuX2NsaXBwaW5nOmZhbHNlCmZvdjowLjUKcmVuZGVyRGlzdGFuY2U6NgpnYW1tYToxLjAKZ3VpU2NhbGU6MwpyZW5kZXJDbG91ZHM6ZmFsc2UKbW9kZXJuX2Z1bGxicmlnaHQ6dHJ1ZQprZXlfa2V5LmhvdGJhci45OjU2CmtleV9rZXkuaG90YmFyLjg6LTk3CmtleV9rZXkuaG90YmFyLjc6LTk2CmtleV9rZXkuc2F2ZVRvb2xiYXJBY3RpdmF0b3I6NDgKa2V5X2tleS5mcmVlbG9vazoyOQ==";
+"dmVyc2lvbjoxMzQzCm1vZGVybl9sb2RSZW5kZXJpbmc6dHJ1ZQptb2Rlcm5fbG9kVmlld0Rpc3RhbmNlOjMyCm1vZGVybl9sb2RTdGFydERpc3RhbmNlOjcKcmVuZGVyRGlzdGFuY2U6NwpvZkNodW5rVXBkYXRlczoxCmNodW5rRml4OnRydWUKZm9nOnRydWUKbW9kZXJuX2VudGl0eUN1bGxpbmc6dHJ1ZQplbnRpdHlTaGFkb3dzOmZhbHNlCm1vZGVybl9zaG93T3duTmFtZXRhZzp0cnVlCm1heEZwczoyNjAKZW5hYmxlVnN5bmM6dHJ1ZQpwYXJ0aWNsZXM6MgphbzowCm1pcG1hcExldmVsczowCmZhbmN5R3JhcGhpY3M6ZmFsc2UKcmVuZGVyQ2xvdWRzOmZhbHNlCm1vZGVybl9ub1JhaW46dHJ1ZQptb2Rlcm5fbm9QYXJ0aWNsZXM6dHJ1ZQptb2Rlcm5fbm9HbGludDpmYWxzZQptb2Rlcm5fYmxvY2tGYWNlQ3VsbGluZzp0cnVlCm1vZGVybl9jaHVua01lc2hPcHRpbWl6YXRpb246dHJ1ZQptb2Rlcm5fY3J5c3RhbE9wdGltaXplcjp0cnVlCm1vZGVybl9lYXRpbmdPcHRpbWl6ZXI6dHJ1ZQptb2Rlcm5fbW90aW9uQmx1cjpmYWxzZQptb2Rlcm5fZnVsbGJyaWdodDp0cnVlCm1vZGVybl90b3RlbUNvdW50ZXI6ZmFsc2UKbW9kZXJuX2NsaXBwaW5nOmZhbHNlCmZvdjowLjUKcmVuZGVyRGlzdGFuY2U6NwpnYW1tYToxLjAKZ3VpU2NhbGU6MwpyZW5kZXJDbG91ZHM6ZmFsc2UKbW9kZXJuX2Z1bGxicmlnaHQ6dHJ1ZQprZXkuaG90YmFyLjk6NTYKa2V5LmhvdGJhci44Oi05NwprZXkuaG90YmFyLjc6LTk2CmtleS5zYXZlVG9vbGJhckFjdGl2YXRvcjo0OAprZXkuZnJlZWxvb2s6Mjk=";
 function getStorage() {
 try {
 if (window.localStorage) return window.localStorage;
@@ -132,6 +138,9 @@ var pKeys = Object.keys(PRESET_KEYS);
 for (var i = 0; i < pKeys.length; i++) {
 map[pKeys[i]] = PRESET_KEYS[pKeys[i]];
 }
+for (var c = 0; c < CLEAN_KEYS.length; c++) {
+if (CLEAN_KEYS[c] in map) delete map[CLEAN_KEYS[c]];
+}
 var b64;
 if (source === "existing" && Object.keys(map).length >= 2) {
 // 与现有设置合并（保留用户在游戏里改的其他项）
@@ -142,7 +151,7 @@ b64 = FULL_PRESET_B64;
 }
 try {
 ls.setItem(FULL_KEY, b64);
-console.log("[RuianPreset] 首次启动设置已写入（来源: " + source + "，共 " + Object.keys(map).length + " 项设置，渲染距离:6）。");
+console.log("[RuianPreset] 首次启动设置已写入（来源: " + source + "，共 " + Object.keys(map).length + " 项设置，渲染距离:7）。");
 return true;
 } catch (ex) {
 console.error("[RuianPreset] 写入失败（不影响游戏启动）: " + ex);

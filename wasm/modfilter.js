@@ -1,11 +1,16 @@
 /*!
-* Ruian Mod 屏蔽 (modfilter.js)  v1.0
+* Ruian Mod 屏蔽 (modfilter.js)  v1.1
 * ---------------------------------------------
 * 在游戏启动时强制覆盖指定 Modern 设置，让对应 mod 功能不生效：
 *   - 动态模糊 Motion Blur        → modern_motionBlur:false
 *   - 关闭 Boss 血条 Disable Boss Bar → modern_disableBossBar:false
 *   - 图腾计数 Totem Counter      → modern_totemCounter:false
-*   - Mod 菜单快捷键失效          → key_key.modmenu:-1 （未绑定，按原键打不开菜单）
+*   - Mod 菜单快捷键失效          → key.modmenu:-1 （未绑定，按原键打不开菜单）
+*
+* v1.1 修复（重要）：
+*   按键绑定的存储键名是 "key.modmenu" 而不是 "key_key.modmenu"！
+*   （wasm 里只有 key.attack / key.modmenu 等字符串，不存在 key_key 前缀；
+*     游戏读到不认识的键会打 "Skipping bad option" 直接跳过 → v1.0 快捷键没失效）
 *
 * 写入机制与 preset.js 相同：
 *   localStorage["_eaglercraft_1.12.g"] = base64(UTF-8 "key:value" 逐行文本)
@@ -24,8 +29,10 @@ var FORCE_KEYS = {
 "modern_motionBlur": "false",
 "modern_disableBossBar": "false",
 "modern_totemCounter": "false",
-"key_key.modmenu": "-1"
+"key.modmenu": "-1"
 };
+// 旧版本写错的键名（key_key.* 前缀），游戏不识别，清掉避免残留
+var CLEAN_KEYS = ["key_key.modmenu"];
 function getStorage() {
 try {
 if (window.localStorage) return window.localStorage;
@@ -94,10 +101,13 @@ var fKeys = Object.keys(FORCE_KEYS);
 for (var i = 0; i < fKeys.length; i++) {
 map[fKeys[i]] = FORCE_KEYS[fKeys[i]];
 }
+for (var j = 0; j < CLEAN_KEYS.length; j++) {
+if (CLEAN_KEYS[j] in map) delete map[CLEAN_KEYS[j]];
+}
 var b64 = textToB64(serializeSettings(map));
 try {
 ls.setItem(FULL_KEY, b64);
-console.log("[RuianModFilter] v1.0 applied: MotionBlur/BossBar/TotemCounter 已关闭, Mod菜单键已失效(-1)");
+console.log("[RuianModFilter] v1.1 applied: MotionBlur/BossBar/TotemCounter 已关闭, Mod菜单键已失效(key.modmenu=-1)");
 return true;
 } catch (ex) {
 console.error("[RuianModFilter] 写入失败（不影响游戏启动）: " + ex);
@@ -131,7 +141,7 @@ for (var i = 0; i < lines.length; i++) {
 if (lines[i].indexOf("modern_motionBlur") === 0 ||
 lines[i].indexOf("modern_disableBossBar") === 0 ||
 lines[i].indexOf("modern_totemCounter") === 0 ||
-lines[i].indexOf("key_key.modmenu") === 0) {
+lines[i].indexOf("key.modmenu") === 0) {
 out.push(lines[i]);
 }
 }
