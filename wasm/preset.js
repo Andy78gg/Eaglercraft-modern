@@ -1,24 +1,26 @@
-/*!
-* Ruian 首次启动设置预设 (preset.js)  v1.6
+  /*!
+* Ruian 首次启动设置预设 (preset.js)  v2.1
 * ---------------------------------------------
-* 在游戏启动时把用户指定的设置写入游戏设置存储：
-*   localStorage["_eaglercraft_1.12.g"] = base64("key:value" 逐行 UTF-8 文本)
+* 在游戏启动前把用户指定的设置写入 /options（IndexedDB 虚拟文件系统）：
+*   localStorage 是错误的存储位置（wasm 只有 PlatformFilesystem，无 localStorage 桥接），
+*   游戏设置真实存储在 IndexedDB 对象仓库 "filesystem" 的 "/options" 文件里。
 *
-* v1.6 修复（重要）：
-*   按键绑定的存储键名是 "key.xxx" 而不是 "key_key.xxx"！
-*   （wasm 里只有 key.hotbar.9 / key.modmenu 等字符串，不存在 key_key 前缀；
-*     之前 key_key.xxx 会被游戏 "Skipping bad option" 跳过 → 键位修改一直没生效）
+* v2.1 修复（键位值）：
+*   - key.saveToolbarActivator: 48(B键) → 47(V键)（用户要求改成 V）
+*   - key.hotbar.8: -97(Button3) → -96(Button4)（鼠标键存储 = -(按钮号+100)）
+*   - key.hotbar.7: -96(Button4) → -95(Button5)
+*
+* v2.0 重大修正：
+*   - 写入目标改为 IndexedDB /options（通过 ruianstorage.js 读写）
+*   - 写入机制从"同步 localStorage"改为"异步 IndexedDB"，index.html 中必须 await
+*
+* v1.6 修复（沿用）：
+*   按键绑定键名是 "key.xxx" 而非 "key_key.xxx"（v1.5 及以前键位修改一直没生效）
 *
 * v1.5 变更: 渲染距离 6 -> 7（折中）
 *   v1.4 降到 6 后近处流畅了, 但 6 格以外玩家放的建筑不显示(远处空)。
 *   改 7 格: 比 9 流畅(近处不缺方块), 远处建筑可见(7~32 格走 LOD)。
 *   lodStartDistance 同步 8->7, 不留空白带。
-*
-* 格式核实（重要修正 v1.3）：
-*   本仓库 1.12 客户端的 GameSettings 与 Eaglercraft 1.8 不同：
-*   - writeOptions() 用 PrintWriter 直接写纯文本（首行 version:1343），没有 gzip；
-*   - loadOptions() 用 IOUtils.readLines() 按 UTF-8 读行解析，也没有解压步骤；
-*   - 存储 = base64(纯文本行)。
 *
 * 各项设置（对照 classes.wasm 字符串与官方 1.12.2 源码核实）：
 *   - 视野 FOV: Pro(90°)        → fov:0.5      （存储值=(角度-70)/40，0.5→90°）
@@ -28,23 +30,20 @@
 *   - GUI 尺寸: 大              → guiScale:3   （0=自动 1=小 2=普通 3=大）
 *   - 云: 关                    → renderClouds:false
 *   - 快捷栏 9 → 左Alt           → key.hotbar.9:56     (LWJGL KEY_LMENU=56)
-*   - 快捷栏 8 → Button 4        → key.hotbar.8:-97    （鼠标键=-100+按钮号）
-*   - 快捷栏 7 → Button 5        → key.hotbar.7:-96
-*   - 保存工具栏激活器 → B        → key.saveToolbarActivator:48 (KEY_B=48)
+*   - 快捷栏 8 → Button 4        → key.hotbar.8:-96    （鼠标键存储=-(按钮号+100)，Button4=-96）
+*   - 快捷栏 7 → Button 5        → key.hotbar.7:-95    （Button5=-95）
+*   - 保存工具栏激活器 → V        → key.saveToolbarActivator:47 (KEY_V=47)
 *   - 自由视角 → 左Ctrl           → key.freelook:29    (KEY_LCONTROL=29)
 *
 * 为什么每次启动都执行：
 *   EaglerBoost(perfmod) 在每次启动时都会整体覆写设置键，若只在第一次写入，
 *   重启后这些项会被冲掉。本脚本在 boost 之后执行、每次与现有设置合并后写回，
 *   保证上述设置始终生效；用户在游戏里改动的其他设置会保留（合并模式）。
-* 控制台：__ruianPreset.apply() 手动重放；__ruianPreset.dump() 打印当前存储文本
+* 控制台：__ruianPreset.apply() 手动重放；__ruianPreset.dump() 打印当前 /options
 * ---------------------------------------------
 */
 (function () {
 "use strict";
-var STORAGE_NAMESPACE = "_eaglercraft_1.12";
-var SETTINGS_KEY = "g";
-var FULL_KEY = STORAGE_NAMESPACE + "." + SETTINGS_KEY;
 // 需要强制生效的预设项（每次启动合并覆写）
 var PRESET_KEYS = {
 "fov": "0.5",
@@ -54,85 +53,29 @@ var PRESET_KEYS = {
 "renderClouds": "false",
 "modern_fullbright": "true",
 "key.hotbar.9": "56",
-"key.hotbar.8": "-97",
-"key.hotbar.7": "-96",
-"key.saveToolbarActivator": "48",
+"key.hotbar.8": "-96",
+"key.hotbar.7": "-95",
+"key.saveToolbarActivator": "47",
 "key.freelook": "29"
 };
 // 旧版本写错的键名（key_key.* 前缀），游戏不识别，清掉避免残留
 var CLEAN_KEYS = ["key_key.hotbar.9", "key_key.hotbar.8", "key_key.hotbar.7", "key_key.saveToolbarActivator", "key_key.freelook"];
-// 全量兜底预设：version:1343 + EaglerBoost 28 项 + 上述 11 项（纯文本 base64，无 gzip）。
-// 仅在"现有设置为空或损坏（旧 gzip 乱码）"时使用，保证一次启动后就干净可用。
-// v1.5: renderDistance 均为 7, lodStartDistance 为 7
+// 全量兜底预设：version:1343 + EaglerBoost 28 项 + 上述 11 项（纯文本，无 gzip）。
+// 仅在"/options 不存在"时使用，保证一次启动后就干净可用。
 var FULL_PRESET_B64 =
-"dmVyc2lvbjoxMzQzCm1vZGVybl9sb2RSZW5kZXJpbmc6dHJ1ZQptb2Rlcm5fbG9kVmlld0Rpc3RhbmNlOjMyCm1vZGVybl9sb2RTdGFydERpc3RhbmNlOjcKcmVuZGVyRGlzdGFuY2U6NwpvZkNodW5rVXBkYXRlczoxCmNodW5rRml4OnRydWUKZm9nOnRydWUKbW9kZXJuX2VudGl0eUN1bGxpbmc6dHJ1ZQplbnRpdHlTaGFkb3dzOmZhbHNlCm1vZGVybl9zaG93T3duTmFtZXRhZzp0cnVlCm1heEZwczoyNjAKZW5hYmxlVnN5bmM6dHJ1ZQpwYXJ0aWNsZXM6MgphbzowCm1pcG1hcExldmVsczowCmZhbmN5R3JhcGhpY3M6ZmFsc2UKcmVuZGVyQ2xvdWRzOmZhbHNlCm1vZGVybl9ub1JhaW46dHJ1ZQptb2Rlcm5fbm9QYXJ0aWNsZXM6dHJ1ZQptb2Rlcm5fbm9HbGludDpmYWxzZQptb2Rlcm5fYmxvY2tGYWNlQ3VsbGluZzp0cnVlCm1vZGVybl9jaHVua01lc2hPcHRpbWl6YXRpb246dHJ1ZQptb2Rlcm5fY3J5c3RhbE9wdGltaXplcjp0cnVlCm1vZGVybl9lYXRpbmdPcHRpbWl6ZXI6dHJ1ZQptb2Rlcm5fbW90aW9uQmx1cjpmYWxzZQptb2Rlcm5fZnVsbGJyaWdodDp0cnVlCm1vZGVybl90b3RlbUNvdW50ZXI6ZmFsc2UKbW9kZXJuX2NsaXBwaW5nOmZhbHNlCmZvdjowLjUKcmVuZGVyRGlzdGFuY2U6NwpnYW1tYToxLjAKZ3VpU2NhbGU6MwpyZW5kZXJDbG91ZHM6ZmFsc2UKbW9kZXJuX2Z1bGxicmlnaHQ6dHJ1ZQprZXkuaG90YmFyLjk6NTYKa2V5LmhvdGJhci44Oi05NwprZXkuaG90YmFyLjc6LTk2CmtleS5zYXZlVG9vbGJhckFjdGl2YXRvcjo0OAprZXkuZnJlZWxvb2s6Mjk=";
-function getStorage() {
+"dmVyc2lvbjoxMzQzCm1vZGVybl9sb2RSZW5kZXJpbmc6dHJ1ZQptb2Rlcm5fbG9kVmlld0Rpc3RhbmNlOjMyCm1vZGVybl9sb2RTdGFydERpc3RhbmNlOjcKcmVuZGVyRGlzdGFuY2U6NwpvZkNodW5rVXBkYXRlczoxCmNodW5rRml4OnRydWUKZm9nOnRydWUKbW9kZXJuX2VudGl0eUN1bGxpbmc6dHJ1ZQplbnRpdHlTaGFkb3dzOmZhbHNlCm1vZGVybl9zaG93T3duTmFtZXRhZzp0cnVlCm1heEZwczoyNjAKZW5hYmxlVnN5bmM6dHJ1ZQpwYXJ0aWNsZXM6MgphbzowCm1pcG1hcExldmVsczowCmZhbmN5R3JhcGhpY3M6ZmFsc2UKcmVuZGVyQ2xvdWRzOmZhbHNlCm1vZGVybl9ub1JhaW46dHJ1ZQptb2Rlcm5fbm9QYXJ0aWNsZXM6dHJ1ZQptb2Rlcm5fbm9HbGludDpmYWxzZQptb2Rlcm5fYmxvY2tGYWNlQ3VsbGluZzp0cnVlCm1vZGVybl9jaHVua01lc2hPcHRpbWl6YXRpb246dHJ1ZQptb2Rlcm5fY3J5c3RhbE9wdGltaXplcjp0cnVlCm1vZGVybl9lYXRpbmdPcHRpbWl6ZXI6dHJ1ZQptb2Rlcm5fbW90aW9uQmx1cjpmYWxzZQptb2Rlcm5fZnVsbGJyaWdodDp0cnVlCm1vZGVybl90b3RlbUNvdW50ZXI6ZmFsc2UKbW9kZXJuX2NsaXBwaW5nOmZhbHNlCmZvdjowLjUKcmVuZGVyRGlzdGFuY2U6NwpnYW1tYToxLjAKZ3VpU2NhbGU6MwpyZW5kZXJDbG91ZHM6ZmFsc2UKbW9kZXJuX2Z1bGxicmlnaHQ6dHJ1ZQprZXkuaG90YmFyLjk6NTYKa2V5LmhvdGJhci44Oi05NgprZXkuaG90YmFyLjc6LTk1CmtleS5zYXZlVG9vbGJhckFjdGl2YXRvcjo0NwprZXkuZnJlZWxvb2s6Mjk=";
+async function applyPreset() {
 try {
-if (window.localStorage) return window.localStorage;
-} catch (ex) {}
-return null;
+if (typeof window.__ruianStorageReadOptions !== "function") {
+console.warn("[RuianPreset] ruianstorage 未加载，跳过。");
+return false;
 }
-function b64ToText(b64) {
-var bin = atob(b64);
-var bytes = new Uint8Array(bin.length);
-for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-return new TextDecoder("utf-8").decode(bytes);
-}
-function textToB64(text) {
-var bytes = new TextEncoder().encode(text);
-var bin = "";
-var CHUNK = 0x8000;
-for (var i = 0; i < bytes.length; i += CHUNK) {
-bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
-}
-return btoa(bin);
-}
-function parseSettings(text) {
-var map = {};
-var lines = text.split("\n");
-for (var i = 0; i < lines.length; i++) {
-var idx = lines[i].indexOf(":");
-if (idx > 0) map[lines[i].slice(0, idx)] = lines[i].slice(idx + 1);
-}
-return map;
-}
-function serializeSettings(map) {
-var keys = Object.keys(map);
-var out = [];
-for (var i = 0; i < keys.length; i++) out.push(keys[i] + ":" + map[keys[i]]);
-return out.join("\n");
-}
-// 旧版本写入的是 gzip，需要在【字节层】检测（gzip magic 0x1F 0x8B）。
-// 注意：不能在 UTF-8 解码后检测——gzip 二进制里 0x8B 会被 UTF-8 解码器
-// 替换成 U+FFFD，magic 就丢了。这里先用 atob 拿到原始字节再判断。
-function decodeStorageText(existing) {
-var bin = atob(existing);
-var bytes = new Uint8Array(bin.length);
-for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-if (bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) {
-return null; // 旧 gzip 二进制，游戏无法解析
-}
-return new TextDecoder("utf-8").decode(bytes);
-}
-function applyPreset() {
-var ls = getStorage();
-if (!ls) return false;
+var text = await window.__ruianStorageReadOptions();
 var map = {};
 var source = "empty";
-var existing = null;
-try { existing = ls.getItem(FULL_KEY); } catch (ex) {}
-if (existing) {
-try {
-var text = decodeStorageText(existing);
-if (text !== null) {
-map = parseSettings(text);
+if (text !== null && text.length > 0) {
+map = window.__ruianStorageParse(text);
 source = "existing";
-} else {
-console.warn("[RuianPreset] 现有设置是旧的 gzip 格式（游戏读不了），将用全新预设替换。");
-}
-} catch (ex) {
-console.warn("[RuianPreset] 现有设置解码失败，将用全新预设替换: " + ex);
-}
 }
 var pKeys = Object.keys(PRESET_KEYS);
 for (var i = 0; i < pKeys.length; i++) {
@@ -141,49 +84,35 @@ map[pKeys[i]] = PRESET_KEYS[pKeys[i]];
 for (var c = 0; c < CLEAN_KEYS.length; c++) {
 if (CLEAN_KEYS[c] in map) delete map[CLEAN_KEYS[c]];
 }
-var b64;
+var newText;
 if (source === "existing" && Object.keys(map).length >= 2) {
 // 与现有设置合并（保留用户在游戏里改的其他项）
-b64 = textToB64(serializeSettings(map));
+newText = window.__ruianStorageSerialize(map);
 } else {
-// 空或损坏：直接写完整预设
-b64 = FULL_PRESET_B64;
+// 空：直接写完整预设
+newText = window.__ruianStorageB64ToText(FULL_PRESET_B64);
 }
-try {
-ls.setItem(FULL_KEY, b64);
-console.log("[RuianPreset] 首次启动设置已写入（来源: " + source + "，共 " + Object.keys(map).length + " 项设置，渲染距离:7）。");
-return true;
+var ok = await window.__ruianStorageWriteOptions(newText);
+if (ok) {
+console.log("[RuianPreset] v2.1 已写入（来源: " + source + "，共 " + Object.keys(map).length + " 项设置，渲染距离:7）。");
+}
+return ok;
 } catch (ex) {
-console.error("[RuianPreset] 写入失败（不影响游戏启动）: " + ex);
+console.error("[RuianPreset] 应用失败（不影响游戏启动）: " + ex);
 return false;
 }
 }
 // 供 wasm/index.html 在 EaglerBoost 设置写入之后调用（保证不被覆盖）
 window.__eaglerPresetApply = function () {
-try {
-applyPreset();
-} catch (ex) {
-console.error("[RuianPreset] 应用失败（不影响游戏启动）: " + ex);
-}
+return applyPreset();
 };
 // 控制台工具
 window.__ruianPreset = {
-apply: function () {
-try { window.__eaglerPresetApply(); } catch (ex) {}
-},
+apply: function () { return applyPreset(); },
 dump: function () {
-var ls = getStorage();
-if (!ls) return "localStorage 不可用";
-try {
-var raw = ls.getItem(FULL_KEY);
-if (!raw) return "未找到 " + FULL_KEY;
-var text = decodeStorageText(raw);
-return text === null
-? "现有值仍是旧 gzip 乱码（下次启动会被本脚本替换为正确格式）"
-: text;
-} catch (ex) {
-return "解码失败: " + ex;
-}
+return window.__ruianStorageReadOptions().then(function (t) {
+return t === null ? "（/options 不存在）" : t;
+}).catch(function (e) { return "解码失败: " + e; });
 }
 };
 })();
