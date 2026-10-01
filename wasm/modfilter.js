@@ -1,11 +1,16 @@
 /*!
-* Ruian Mod 屏蔽 (modfilter.js)  v2.0
+* Ruian Mod 屏蔽 (modfilter.js)  v2.1
 * ---------------------------------------------
 * 在游戏启动前强制修改 /options（IndexedDB 虚拟文件系统）里的指定 Modern 设置：
 *   - 动态模糊 Motion Blur        → modern_motionBlur:false
 *   - 关闭 Boss 血条 Disable Boss Bar → modern_disableBossBar:false
 *   - 图腾计数 Totem Counter      → modern_totemCounter:false
-*   - Mod 菜单快捷键失效          → key.modmenu:-1 （未绑定，按原键打不开菜单）
+*
+* v2.1 变更（开放 Mod 菜单）：
+*   - 移除 "key.modmenu:-1" 强制禁用，Mod 菜单恢复可用；
+*   - 写入前主动删除残留的 key.modmenu 键（含旧版错误键 key_key.modmenu），
+*     让游戏使用内置默认的 Mod 菜单快捷键，玩家也可在 Controls 里自行绑定；
+*   - 仅保留上述三项 Modern 功能强制关闭（存在则覆盖，不存在则新增）。
 *
 * v2.0 重大修正：
 *   游戏设置真实存储在 IndexedDB 的 /options 文件里，不是 localStorage！
@@ -27,14 +32,14 @@
 var FORCE_KEYS = {
 "modern_motionBlur": "false",
 "modern_disableBossBar": "false",
-"modern_totemCounter": "false",
-"key.modmenu": "-1"
+"modern_totemCounter": "false"
 };
-// 旧版本写错的键名（key_key.* 前缀），游戏不识别，清掉避免残留
-var CLEAN_KEYS = ["key_key.modmenu"];
+// 开放 Mod 菜单：写入前强制删除这些键，让游戏使用默认的 Mod 菜单快捷键
+// （v2.0 曾写入 key.modmenu:-1，不删掉的话菜单仍然打不开）
+var REMOVE_KEYS = ["key.modmenu", "key_key.modmenu"];
 // 空 /options 时的最小兜底（缺的键游戏会用默认值，不会崩溃）
 function minimalBase() {
-return ["version:1343", "key.modmenu:-1"].join("\n");
+return "version:1343";
 }
 async function applyModFilter() {
 try {
@@ -54,13 +59,14 @@ var fKeys = Object.keys(FORCE_KEYS);
 for (var i = 0; i < fKeys.length; i++) {
 map[fKeys[i]] = FORCE_KEYS[fKeys[i]];
 }
-for (var j = 0; j < CLEAN_KEYS.length; j++) {
-if (CLEAN_KEYS[j] in map) delete map[CLEAN_KEYS[j]];
+var rKeys = REMOVE_KEYS;
+for (var k = 0; k < rKeys.length; k++) {
+if (rKeys[k] in map) delete map[rKeys[k]];
 }
 var newText = window.__ruianStorageSerialize(map);
 var ok = await window.__ruianStorageWriteOptions(newText);
 if (ok) {
-console.log("[RuianModFilter] v2.0 applied: MotionBlur/BossBar/TotemCounter 已关闭, Mod菜单键已失效(key.modmenu=-1)");
+console.log("[RuianModFilter] v2.1 applied: MotionBlur/BossBar/TotemCounter 已关闭, Mod 菜单已开放(key.modmenu 恢复默认)");
 }
 return ok;
 } catch (ex) {
@@ -83,8 +89,7 @@ var out = [];
 for (var i = 0; i < lines.length; i++) {
 if (lines[i].indexOf("modern_motionBlur") === 0 ||
 lines[i].indexOf("modern_disableBossBar") === 0 ||
-lines[i].indexOf("modern_totemCounter") === 0 ||
-lines[i].indexOf("key.modmenu") === 0) {
+lines[i].indexOf("modern_totemCounter") === 0) {
 out.push(lines[i]);
 }
 }
