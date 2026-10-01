@@ -28,8 +28,8 @@
 		<script type="text/javascript" src="autoclicker.js?v=1.11"></script>
 		<!-- Ruian 首次启动设置预设：必须在 eagruntime.js 之前加载 -->
 		<script type="text/javascript" src="preset.js?v=2.1"></script>
-		<!-- Ruian Mod 屏蔽：关闭指定 Modern 功能 + Mod 菜单键失效。必须在 eagruntime.js 之前加载 -->
-		<script type="text/javascript" src="modfilter.js?v=2.0"></script>
+		<!-- Ruian Mod 屏蔽：关闭指定 Modern 功能（Mod 菜单已开放）。必须在 eagruntime.js 之前加载 -->
+		<script type="text/javascript" src="modfilter.js?v=2.1"></script>
 		<script type="text/javascript">
 			"use strict";
 			window.addEventListener("load", async function() {
@@ -103,8 +103,8 @@
 						getEPKFiles: function() {
 							return [{
 								name: "assets.epk",
-								path: "",
-								data: assetsEPK
+							path: "",
+							data: assetsEPK
 							}];
 						},
 						getRootElement: function() {
