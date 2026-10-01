@@ -1,20 +1,35 @@
 /*!
-* Ruian 设置存储桥接 (ruianstorage.js)  v1.0
+* Ruian 设置存储桥接 (ruianstorage.js)  v1.1
 * ---------------------------------------------
-* 关键修正：游戏设置真实存储在 IndexedDB 虚拟文件系统的 /options 文件里，
-* 不是 localStorage！证据：
+* v1.1 重大修复（预设/屏蔽一直不生效的真正根因）：
+*   游戏实际使用的 IndexedDB 数据库名是
+*   "_net_lax1dude_eaglercraft_v1_8_internal_PlatformFilesystem_1_12_2_"！
+*   数据库名 = Java 侧 PlatformFilesystem_1_12_2 类的完整类名（实测确认）。
+*   v1.0 的 findGameDB 先遍历 indexedDB.databases()（首次启动为空），
+*   再按候选名单 openDB("_eaglercraft_1.12") —— 而 indexedDB.open() 在
+*   数据库不存在时会【自动创建】它，导致写入"成功"却是写进了自建的假库；
+*   游戏从自己的真库读 /options（空）→ preset/modfilter 永远不生效。
+*   本版直接固定使用游戏的真实数据库名（openDB 会自动创建该库，
+*   游戏随后打开同一名字即可读到），不再猜库名。
+*
+* 游戏设置真实存储在 IndexedDB 虚拟文件系统的 /options 文件里，
+* 不是 localStorage！证据（实测 + 二进制核查）：
+*   - 浏览器实测：游戏启动后创建数据库
+*     "_net_lax1dude_eaglercraft_v1_8_internal_PlatformFilesystem_1_12_2_"
+*     并在其 "filesystem" 对象仓库（keyPath:["path"]）里管理 /options；
 *   - classes.wasm 里有 "Failed to load options, The filesystem has not been initialized yet!"
-*     和文件路径 "/options"，以及 PlatformFilesystem_1_12_2 类；
+*     与 PlatformFilesystem_1_12_2 类名（= 数据库名）；
 *   - eagruntime.js 的文件系统桥接 = IndexedDB 对象仓库 "filesystem"（keyPath:["path"]）；
 *   - classes.wasm 里没有任何 localStorage 的 Java 桥接。
 *
 * 本模块提供 IndexedDB 读写 /options 的统一接口，供 perfmod/preset/modfilter 使用。
-* 通过遍历 indexedDB.databases() 找到含 filesystem 仓库的游戏数据库（不依赖猜数据库名）。
 * ---------------------------------------------
 */
 (function () {
 "use strict";
 var OPTIONS_PATH = "/options";
+// 游戏真实数据库名（实测确认，= PlatformFilesystem_1_12_2 类全名）
+var GAME_DB_NAME = "_net_lax1dude_eaglercraft_v1_8_internal_PlatformFilesystem_1_12_2_";
 function openDB(name) {
 return new Promise(function (resolve, reject) {
 try {
@@ -61,23 +76,24 @@ new Uint8Array(buf).set(bytes);
 return buf;
 }
 async function findGameDB() {
+// 1) 直接打开游戏的真实数据库（不存在时 openDB 会自动创建 filesystem 仓库，
+//    游戏随后打开同一名字即可读到；与游戏 indexedDB.open(name,1) 兼容）
+var db = await openDB(GAME_DB_NAME);
+if (db.objectStoreNames.contains("filesystem")) {
+console.log("[RuianStorage] 使用游戏数据库: " + GAME_DB_NAME);
+return db;
+}
+db.close();
+// 2) 兜底：遍历现有数据库找含 filesystem 仓库的（兼容其他构建的库名）
 var names = [];
 try {
 var dbs = await indexedDB.databases();
 names = dbs.map(function (d) { return d.name; });
 } catch (e) {}
 for (var i = 0; i < names.length; i++) {
+if (names[i] === GAME_DB_NAME) continue;
 try {
-var db = await openDB(names[i]);
-if (db.objectStoreNames.contains("filesystem")) return db;
-db.close();
-} catch (e) {}
-}
-// 兜底候选名（依次尝试）
-var candidates = ["_eaglercraft_1.12", "EaglercraftX", "Eaglercraft", "eaglercraftx", "_eaglercraftX", "eaglercraft"];
-for (var j = 0; j < candidates.length; j++) {
-try {
-var db2 = await openDB(candidates[j]);
+var db2 = await openDB(names[i]);
 if (db2.objectStoreNames.contains("filesystem")) return db2;
 db2.close();
 } catch (e) {}
@@ -154,4 +170,3 @@ return t === null ? "（/options 不存在）" : t;
 }
 };
 })();
-//（注：内容由AI生成）
