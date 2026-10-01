@@ -1,13 +1,21 @@
-  /*!
-* Ruian 首次启动设置预设 (preset.js)  v2.1
+/*!
+* Ruian 首次启动设置预设 (preset.js)  v2.2
 * ---------------------------------------------
 * 在游戏启动前把用户指定的设置写入 /options（IndexedDB 虚拟文件系统）：
 *   localStorage 是错误的存储位置（wasm 只有 PlatformFilesystem，无 localStorage 桥接），
 *   游戏设置真实存储在 IndexedDB 对象仓库 "filesystem" 的 "/options" 文件里。
 *
+* v2.2 变更（解决"改了不生效"）：
+*   - 根因：修改 preset.js 内容后，若不同步 wasm/index.html 里引用的版本号
+*     （preset.js?v=2.1），浏览器会继续使用缓存的旧脚本，改动根本不加载。
+*   - 本版升到 v2.2，index.html 同步引用 ?v=2.2，强制重新下载。
+*   - 新增写入失败显式告警：若控制台出现 [RuianPreset] 写入失败，
+*     请查看 [RuianStorage] 日志。首次启动时游戏 IndexedDB 数据库尚未创建，
+*     预设无法写入，属于正常现象，游戏创建数据库后的下一次启动才会生效。
+*
 * v2.1 修复（键位值）：
 *   - key.saveToolbarActivator: 48(B键) → 47(V键)（用户要求改成 V）
-*   - key.hotbar.8: -97(Button3) → -96(Button4)（鼠标键存储 = -(按钮号+100)）
+*   - key.hotbar.8: -97(Button3) → -96(Button4)
 *   - key.hotbar.7: -96(Button4) → -95(Button5)
 *
 * v2.0 重大修正：
@@ -30,8 +38,8 @@
 *   - GUI 尺寸: 大              → guiScale:3   （0=自动 1=小 2=普通 3=大）
 *   - 云: 关                    → renderClouds:false
 *   - 快捷栏 9 → 左Alt           → key.hotbar.9:56     (LWJGL KEY_LMENU=56)
-*   - 快捷栏 8 → Button 4        → key.hotbar.8:-96    （鼠标键存储=-(按钮号+100)，Button4=-96）
-*   - 快捷栏 7 → Button 5        → key.hotbar.7:-95    （Button5=-95）
+*   - 快捷栏 8 → Button 4        → key.hotbar.8:-96
+*   - 快捷栏 7 → Button 5        → key.hotbar.7:-95
 *   - 保存工具栏激活器 → V        → key.saveToolbarActivator:47 (KEY_V=47)
 *   - 自由视角 → 左Ctrl           → key.freelook:29    (KEY_LCONTROL=29)
 *
@@ -94,7 +102,9 @@ newText = window.__ruianStorageB64ToText(FULL_PRESET_B64);
 }
 var ok = await window.__ruianStorageWriteOptions(newText);
 if (ok) {
-console.log("[RuianPreset] v2.1 已写入（来源: " + source + "，共 " + Object.keys(map).length + " 项设置，渲染距离:7）。");
+console.log("[RuianPreset] v2.2 已写入（来源: " + source + "，共 " + Object.keys(map).length + " 项设置，渲染距离:7）。");
+} else {
+console.error("[RuianPreset] 写入 /options 失败！请查看上方 [RuianStorage] 日志：未找到游戏数据库时（首次启动/无痕模式）预设无法写入，游戏创建数据库后的下一次启动才会生效。");
 }
 return ok;
 } catch (ex) {
