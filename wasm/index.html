@@ -20,16 +20,16 @@
 		<meta property="og:title" content="Eaglercraft 1.12 WASM-GC" />
 		<meta property="og:description" content="test directory HTML page" />
 		<link type="image/png" rel="shortcut icon" href="7878.png" />
-		<!-- Ruian 设置存储桥接：游戏设置存在 IndexedDB 的 /options，必须先加载 -->
-		<script type="text/javascript" src="ruianstorage.js?v=1.1"></script>
+		<!-- Ruian 设置存储桥接：游戏设置存在 localStorage[_eaglercraft_1.12.g]（实测确认），必须先加载 -->
+		<script type="text/javascript" src="ruianstorage.js?v=1.2"></script>
 		<!-- EaglerBoost 性能增强 Mod：必须在 eagruntime.js 之前加载 -->
-		<script type="text/javascript" src="perfmod.js?v=3.3"></script>
+		<script type="text/javascript" src="perfmod.js?v=3.4"></script>
 		<!-- Ruian AutoClicker 连点器 Mod：必须在 eagruntime.js 之前加载 -->
 		<script type="text/javascript" src="autoclicker.js?v=1.11"></script>
 		<!-- Ruian 首次启动设置预设：必须在 eagruntime.js 之前加载 -->
-		<script type="text/javascript" src="preset.js?v=2.2"></script>
+		<script type="text/javascript" src="preset.js?v=3.0"></script>
 		<!-- Ruian Mod 屏蔽：关闭指定 Modern 功能（Mod 菜单已开放）。必须在 eagruntime.js 之前加载 -->
-		<script type="text/javascript" src="modfilter.js?v=2.1"></script>
+		<script type="text/javascript" src="modfilter.js?v=3.0"></script>
 		<script type="text/javascript">
 			"use strict";
 			window.addEventListener("load", async function() {
@@ -71,7 +71,7 @@
 							{ addr: "wss://relay.shhnowisnottheti.me/", comment: "ayunami relay #1", primary: relayId === 2 }
 						]
 					};
-					// EaglerBoost 性能增强 Mod：注入优化选项与设置钩子（异步写入 IndexedDB /options，必须等待）
+					// EaglerBoost 性能增强 Mod：注入优化选项与设置钩子（异步写入 localStorage，必须等待）
 					if(typeof window.__eaglerBoostApply === "function") {
 						await window.__eaglerBoostApply(eaglercraftXOpts);
 					}
