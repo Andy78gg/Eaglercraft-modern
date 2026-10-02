@@ -1,22 +1,26 @@
 /*!
-* Ruian Mod 屏蔽 (modfilter.js)  v3.0
+* Ruian Mod 屏蔽 (modfilter.js)  v3.1
 * ---------------------------------------------
 * 在游戏启动前强制修改游戏设置存储里的指定 Modern 设置：
 *   存储 = localStorage["_eaglercraft_1.12.g"]（base64 纯文本，实测确认）
-*   - 动态模糊 Motion Blur        → modern_motionBlur:false
-*   - 关闭 Boss 血条 Disable Boss Bar → modern_disableBossBar:false
-*   - 图腾计数 Totem Counter      → modern_totemCounter:false
+*   - 动态模糊 Motion Blur        → modern_motionBlur:false     （关闭）
+*   - 屏蔽 Boss 血条 Boss Bar     → modern_disableBossBar:true  （隐藏 BossBar）
+*   - 图腾计数 Totem Counter      → modern_totemCounter:false   （关闭）
 *
-* v3.0 变更：
+* v3.1 修正（语义，浏览器实测确认）：
+*   - modern_disableBossBar 的含义是“禁用 Boss 血条”：true = 隐藏，
+*     false = 不禁用（BossBar 照常显示）。v3.0 写成 false 导致
+*     “屏蔽 BossBar”实际未生效 —— 这是用户反馈“Mod 还是没用”的根因。
+*   - 实测确认写入机制本身正确：把 modern_noRain 改为 false 后
+*     Mods 菜单里 No Rain 开关确实变关（localStorage 键 ↔ 游戏开关一一对应）。
+*   - 另确认：Motion Blur / Disable Boss Bar / Totem Counter 三个条目
+*     不显示在 Mods 菜单里（隐藏功能），只能通过设置键控制。
+*
+* v3.0 变更（沿用）：
 *   - 存储位置修正：v2.x 写 IndexedDB /options 是给死数据（游戏不读），
 *     本版通过 ruianstorage v1.2 写 localStorage["_eaglercraft_1.12.g"]，
 *     与游戏真实读取位置一致 → 屏蔽项真正生效。
-*   - Mod 菜单保持开放（沿用 v2.1）：删除 key.modmenu / key_key.modmenu 残留，
-*     让游戏使用内置默认的 Mod 菜单快捷键，玩家也可在 Controls 里自行绑定。
-*
-* v2.1 变更（沿用）：
-*   - 移除 "key.modmenu:-1" 强制禁用，Mod 菜单恢复可用；
-*   - 仅保留上述三项 Modern 功能强制关闭（存在则覆盖，不存在则新增）。
+*   - Mod 菜单保持开放（沿用 v2.1）：删除 key.modmenu / key_key.modmenu 残留。
 *
 * 时序（在 wasm/index.html 中，全部 await 串行）：
 *   ruianstorage → perfmod(Boost 写完整配置) → preset(合并 11 项) →
@@ -28,7 +32,7 @@
 // 每次启动强制生效的屏蔽项（存在则覆盖，不存在则新增）
 var FORCE_KEYS = {
 "modern_motionBlur": "false",
-"modern_disableBossBar": "false",
+"modern_disableBossBar": "true",
 "modern_totemCounter": "false"
 };
 // 开放 Mod 菜单：写入前强制删除这些键，让游戏使用默认的 Mod 菜单快捷键
@@ -63,7 +67,7 @@ if (rKeys[k] in map) delete map[rKeys[k]];
 var newText = window.__ruianStorageSerialize(map);
 var ok = await window.__ruianStorageWriteOptions(newText);
 if (ok) {
-console.log("[RuianModFilter] v3.0 applied: MotionBlur/BossBar/TotemCounter 已关闭, Mod 菜单已开放(key.modmenu 恢复默认)");
+console.log("[RuianModFilter] v3.1 applied: MotionBlur/TotemCounter 已关闭, BossBar 已屏蔽, Mod 菜单已开放");
 }
 return ok;
 } catch (ex) {
