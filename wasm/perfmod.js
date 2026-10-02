@@ -1,5 +1,5 @@
 /*!
-* EaglerBoost 性能增强 Mod  (perfmod.js)  v3.3
+* EaglerBoost 性能增强 Mod  (perfmod.js)  v3.4
 * ---------------------------------------------
 * 给本仓库的 EaglercraftX 1.12 (modernclient) 客户端注入三组优化：
 *
@@ -8,21 +8,16 @@
 *  3) 提升 FPS  —— 关闭雨/粒子/附魔光效/云、降平滑光照与 mipmap、
 *                  开启方块面剔除/区块网格优化，并关闭调试堆栈去混淆以减少卡顿
 *
-* v3.3 重大修正（存储位置）：
-*   游戏设置真实存储在 IndexedDB 虚拟文件系统 /options 文件里，不是 localStorage！
-*   （wasm 只有 PlatformFilesystem 桥接、无 localStorage；v3.2 及以前写 localStorage
-*     是写给"死数据"，游戏根本不读）
-*   本版通过 ruianstorage.js 异步读写 /options。
+* v3.4 修正（存储位置结论反转，浏览器实测确认）：
+*   游戏设置真实存储在 localStorage["_eaglercraft_1.12.g"]（base64 纯文本），
+*   不是 IndexedDB！v3.3 的"IndexedDB"结论是错的（当时被误导）。
+*   本版仍通过 ruianstorage.js 接口读写 —— ruianstorage v1.2 已改为
+*   localStorage 桥接，此文件逻辑无需改动，仅更新版本号强制刷新缓存。
 *
-* v3.2 瘦身：
-*  - 关掉 showOwnNametag（头顶额外渲染自己的名字标签），纯性能不加花架子
-*  - 修掉 FULL_KEY 重复行
-*
-* v3.1 流畅性：
-*  - maxFps 260 -> 120（WASM 版跑 260 帧时间抖动反而卡，锁 120 更稳更顺）
-*  - particles 2 -> 0（粒子全关，省 CPU/GC）
-*  - fog true -> false（关雾，省远处填充）
-*  - renderDistance 9 -> 7 / lodStartDistance 8 -> 7（与 preset 对齐）
+* v3.3 变更（沿用）：
+*   - maxFps 260 -> 120 / particles 2 -> 0 / fog true -> false / renderDistance 9 -> 7
+*   - lodStartDistance 8 -> 7（与 preset 对齐）
+*   - 关掉 showOwnNametag / entityShadows
 *
 * 通过 URL 参数控制：?boost=1 开启（默认），?boost=0 关闭
 * ---------------------------------------------
@@ -32,7 +27,7 @@
 // 性能增强预设：base64(设置文本)，纯文本行、无 gzip
 // v3.1: renderDistance:7 / lodStartDistance:7 / fog:false / maxFps:120 / particles:0
 var BOOST_SETTINGS_B64 =
-"dmVyc2lvbjoxMzQzCm1vZGVybl9sb2RSZW5kZXJpbmc6dHJ1ZQptb2Rlcm5fbG9kVmlld0Rpc3RhbmNlOjMyCm1vZGVybl9sb2RTdGFydERpc3RhbmNlOjcKcmVuZGVyRGlzdGFuY2U6NwpvZkNodW5rVXBkYXRlczoxCmNodW5rRml4OnRydWUKZm9nOmZhbHNlCm1vZGVybl9lbnRpdHlDdWxsaW5nOnRydWUKZW50aXR5U2hhZG93czpmYWxzZQptb2Rlcm5fc2hvd093bk5hbWV0YWc6ZmFsc2UKbWF4RnBzOjEyMAplbmFibGVWU3luYzp0cnVlCnBhcnRpY2xlczowCmFvOjAKbWlwbWFwTGV2ZWxzOjAKZmFuY3lHcmFwaGljczpmYWxzZQplbmRlckNsb3VkczpmYWxzZQptb2Rlcm5fbm9SYWluOnRydWUKbW9kZXJuX25vUGFydGljbGVzOnRydWUKbW9kZXJuX25vR2xpbnQ6ZmFsc2UKbW9kZXJuX2Jsb2NrRmFjZUN1bGxpbmc6dHJ1ZQptb2Rlcm5fY2h1bmtNZXNoT3B0aW1pemF0aW9uOnRydWUKbW9kZXJuX2NyeXN0YWxPcHRpbWl6ZXI6dHJ1ZQptb2Rlcm5fZWF0aW5nT3B0aW1pemVyOnRydWUKbW9kZXJuX21vdGlvbkJsdXI6ZmFsc2UKbW9kZXJuX2Z1bGxicmlnaHQ6dHJ1ZQptb2Rlcm5fdG90ZW1Db3VudGVyOmZhbHNlCm1vZGVybl9jbGlwcGluZzpmYWxzZQ==";
+"dmVyc2lvbjoxMzQzCm1vZGVybl9sb2RSZW5kZXJpbmc6dHJ1ZQptb2Rlcm5fbG9kVmlld0Rpc3RhbmNlOjMyCm1vZGVybl9sb2RTdGFydERpc3RhbmNlOjcKcmVuZGVyRGlzdGFuY2U6NwpvZkNodW5rVXBkYXRlczoxCmNodW5rRml4OnRydWUKZm9nOmZhbHNlCm1vZGVybl9lbnRpdHlDdWxsaW5nOnRydWUKZW50aXR5U2hhZG93czpmYWxzZQptb2Rlcm5fc2hvd093bk5hbWV0YWc6ZmFsc2UKbWF4RnBzOjEyMAplbmFibGVWU3luYzp0cnVlCnBhcnRpY2xlczowCmFvOjAKbWlwbWFwTGV2ZWxzOjAKZmFuY3lHcmFwaGljczpmYWxzZQplbmRlckNsb3VkczpmYWxzZQptb2Rlcm5fbm9SYWluOnRydWUKbW9kZXJuX25vUGFydGljbGVzOnRydWUKbW9kZXJuX25vR2xpbnQ6ZmFsc2UKbW9kZXJuX2Jsb2NrRmFjZUN1bGxpbmc6dHJ1ZQptb2Rlcm5fY2h1bmtNZXNoT3B0aW1pemF0aW9uOnRydWUKbW9kZXJuX2NyeXN0YWxPcHRpbWl6ZXI6dHJ1ZQptb2Rlcm5fZWF0aW5nT3B0aW1pZXI6dHJ1ZQptb2Rlcm5fbW90aW9uQmx1cjpmYWxzZQptb2Rlcm5fZnVsbGJyaWdodDp0cnVlCm1vZGVybl90b3RlbUNvdW50ZXI6ZmFsc2UKbW9kZXJuX2NsaXBwaW5nOmZhbHNlZQ==";
 function getURLParam(name) {
 try {
 var q = window.location.search;
@@ -50,7 +45,7 @@ var v = getURLParam("boost");
 if (v === null) return true; // 未指定时默认开启
 return v === "1" || v === "true" || v === "on";
 }
-// 写入增强预设到 /options（IndexedDB），合并保留其他设置
+// 写入增强预设到游戏设置存储（localStorage，经 ruianstorage），合并保留其他设置
 async function applyBoostSettings() {
 try {
 if (typeof window.__ruianStorageReadOptions !== "function") {
@@ -62,7 +57,7 @@ var map = {};
 if (text !== null && text.length > 0) {
 map = window.__ruianStorageParse(text);
 } else {
-console.warn("[EaglerBoost] /options 不存在，将用完整增强预设初始化。");
+console.warn("[EaglerBoost] 设置不存在，将用完整增强预设初始化。");
 }
 // BOOST 预设解析并合并覆盖
 var boostMap = window.__ruianStorageParse(window.__ruianStorageB64ToText(BOOST_SETTINGS_B64));
@@ -72,7 +67,7 @@ map[k] = boostMap[k];
 var newText = window.__ruianStorageSerialize(map);
 var ok = await window.__ruianStorageWriteOptions(newText);
 if (ok) {
-console.log("[EaglerBoost] 性能增强设置已写入 v3.3（渲染7/ maxFps120/ 无粒子/ 关雾）。");
+console.log("[EaglerBoost] 性能增强设置已写入 v3.4（渲染7/ maxFps120/ 无粒子/ 关雾）。");
 }
 return ok;
 } catch (ex) {
@@ -92,10 +87,10 @@ opts.checkGLErrors = false;
 opts.checkShaderGLErrors = false;
 opts.useDelayOnSwap = false;
 opts.useWebGLExt = true;
-// ---- 游戏设置注入（IndexedDB /options）----
+// ---- 游戏设置注入（localStorage，经 ruianstorage）----
 if (boost) {
 return applyBoostSettings().then(function (ok) {
-console.log("[EaglerBoost] 性能增强 Mod v3.3 已开启：LOD 区块渲染 / 实体加载优化 / FPS 提升。");
+console.log("[EaglerBoost] 性能增强 Mod v3.4 已开启：LOD 区块渲染 / 实体加载优化 / FPS 提升。");
 return ok;
 });
 } else {
