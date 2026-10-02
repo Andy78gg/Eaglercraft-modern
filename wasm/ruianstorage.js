@@ -1,139 +1,95 @@
 /*!
-* Ruian 设置存储桥接 (ruianstorage.js)  v1.1
+* Ruian 设置存储桥接 (ruianstorage.js)  v1.2
 * ---------------------------------------------
-* v1.1 重大修复（预设/屏蔽一直不生效的真正根因）：
-*   游戏实际使用的 IndexedDB 数据库名是
-*   "_net_lax1dude_eaglercraft_v1_8_internal_PlatformFilesystem_1_12_2_"！
-*   数据库名 = Java 侧 PlatformFilesystem_1_12_2 类的完整类名（实测确认）。
-*   v1.0 的 findGameDB 先遍历 indexedDB.databases()（首次启动为空），
-*   再按候选名单 openDB("_eaglercraft_1.12") —— 而 indexedDB.open() 在
-*   数据库不存在时会【自动创建】它，导致写入"成功"却是写进了自建的假库；
-*   游戏从自己的真库读 /options（空）→ preset/modfilter 永远不生效。
-*   本版直接固定使用游戏的真实数据库名（openDB 会自动创建该库，
-*   游戏随后打开同一名字即可读到），不再猜库名。
+* v1.2 重大反转修复（真正的根因，浏览器实测确认）：
+*   游戏设置真实存储在 localStorage["_eaglercraft_1.12.g"]，
+*   值 = base64(UTF-8 "key:value" 逐行纯文本)！
+*   【实测证据】
+*   - 在游戏设置界面把 FOV 改一档后，游戏自己回写了 localStorage
+*     ["_eaglercraft_1.12.g"]（含 hasSeenFirstLoad:true 等完整 100+ 行）；
+*   - 手动写入 localStorage 的 fov:0.5 后重启游戏，设置界面显示 FOV: 90
+*     → 游戏确实从 localStorage 读取并应用设置；
+*   - 游戏写入的键位是 "key_key.attack" 等 key_key. 前缀（写读对称）；
+*   - IndexedDB 数据库 _net_lax1dude_eaglercraft_v1_8_internal_
+*     PlatformFilesystem_1_12_2_ 只用于其他文件（世界存档等），
+*     游戏设置不读 IndexedDB /options。
+*   v1.0/v1.1 写 IndexedDB /options 是给"死数据"，游戏根本不读
+*   → 这就是预设/屏蔽一直不生效的真正根因。
 *
-* 游戏设置真实存储在 IndexedDB 虚拟文件系统的 /options 文件里，
-* 不是 localStorage！证据（实测 + 二进制核查）：
-*   - 浏览器实测：游戏启动后创建数据库
-*     "_net_lax1dude_eaglercraft_v1_8_internal_PlatformFilesystem_1_12_2_"
-*     并在其 "filesystem" 对象仓库（keyPath:["path"]）里管理 /options；
-*   - classes.wasm 里有 "Failed to load options, The filesystem has not been initialized yet!"
-*     与 PlatformFilesystem_1_12_2 类名（= 数据库名）；
-*   - eagruntime.js 的文件系统桥接 = IndexedDB 对象仓库 "filesystem"（keyPath:["path"]）；
-*   - classes.wasm 里没有任何 localStorage 的 Java 桥接。
+* 键名说明（实测确认）：
+*   游戏内部键名为 "key_key.xxx"（如 key_key.hotbar.9 / key_key.modmenu）。
+*   preset/modfilter 必须用 key_key. 前缀写入。
 *
-* 本模块提供 IndexedDB 读写 /options 的统一接口，供 perfmod/preset/modfilter 使用。
+* 本模块提供读写游戏设置的统一接口，供 perfmod/preset/modfilter 使用。
 * ---------------------------------------------
 */
 (function () {
 "use strict";
-var OPTIONS_PATH = "/options";
-// 游戏真实数据库名（实测确认，= PlatformFilesystem_1_12_2 类全名）
-var GAME_DB_NAME = "_net_lax1dude_eaglercraft_v1_8_internal_PlatformFilesystem_1_12_2_";
-function openDB(name) {
-return new Promise(function (resolve, reject) {
+var OPTIONS_PATH = "/options"; // 兼容旧命名，实际存于 localStorage
+var STORAGE_NAMESPACE = "_eaglercraft_1.12";
+var SETTINGS_KEY = "g";
+var FULL_KEY = STORAGE_NAMESPACE + "." + SETTINGS_KEY;
+function getStorage() {
 try {
-var r = indexedDB.open(name);
-r.onsuccess = function () { resolve(r.result); };
-r.onerror = function () { reject(r.error || new Error("open failed")); };
-r.onupgradeneeded = function () {
-if (!r.result.objectStoreNames.contains("filesystem")) {
-r.result.createObjectStore("filesystem", { keyPath: ["path"] });
+if (window.localStorage) return window.localStorage;
+} catch (ex) {}
+return null;
 }
-};
-} catch (e) { reject(e); }
-});
-}
-function getRecord(db, path) {
-return new Promise(function (resolve, reject) {
-try {
-var tx = db.transaction("filesystem", "readonly");
-var req = tx.objectStore("filesystem").get([path]);
-req.onsuccess = function () { resolve(req.result || null); };
-req.onerror = function () { reject(req.error); };
-} catch (e) { reject(e); }
-});
-}
-function putRecord(db, path, data) {
-return new Promise(function (resolve, reject) {
-try {
-var tx = db.transaction("filesystem", "readwrite");
-var req = tx.objectStore("filesystem").put({ path: path, data: data });
-req.onsuccess = function () { resolve(true); };
-req.onerror = function () { reject(req.error); };
-} catch (e) { reject(e); }
-});
-}
-function decodeData(data) {
-if (!data) return "";
-var bytes = (data instanceof Uint8Array) ? data : new Uint8Array(data);
+function b64ToText(b64) {
+var bin = atob(b64);
+var bytes = new Uint8Array(bin.length);
+for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
 return new TextDecoder("utf-8").decode(bytes);
 }
-function encodeData(text) {
+function textToB64(text) {
 var bytes = new TextEncoder().encode(text);
-var buf = new ArrayBuffer(bytes.byteLength);
-new Uint8Array(buf).set(bytes);
-return buf;
+var bin = "";
+var CHUNK = 0x8000;
+for (var i = 0; i < bytes.length; i += CHUNK) {
+bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
 }
-async function findGameDB() {
-// 1) 直接打开游戏的真实数据库（不存在时 openDB 会自动创建 filesystem 仓库，
-//    游戏随后打开同一名字即可读到；与游戏 indexedDB.open(name,1) 兼容）
-var db = await openDB(GAME_DB_NAME);
-if (db.objectStoreNames.contains("filesystem")) {
-console.log("[RuianStorage] 使用游戏数据库: " + GAME_DB_NAME);
-return db;
+return btoa(bin);
 }
-db.close();
-// 2) 兜底：遍历现有数据库找含 filesystem 仓库的（兼容其他构建的库名）
-var names = [];
+// 读取设置文本（base64 解码）；不存在或损坏返回 null
+window.__ruianStorageReadOptions = function () {
+return new Promise(function (resolve) {
 try {
-var dbs = await indexedDB.databases();
-names = dbs.map(function (d) { return d.name; });
-} catch (e) {}
-for (var i = 0; i < names.length; i++) {
-if (names[i] === GAME_DB_NAME) continue;
+var ls = getStorage();
+if (!ls) { resolve(null); return; }
+var raw = null;
+try { raw = ls.getItem(FULL_KEY); } catch (ex) {}
+if (!raw) { resolve(null); return; }
 try {
-var db2 = await openDB(names[i]);
-if (db2.objectStoreNames.contains("filesystem")) return db2;
-db2.close();
-} catch (e) {}
+resolve(b64ToText(raw));
+} catch (ex) {
+console.warn("[RuianStorage] 设置解码失败（将被重建）: " + ex);
+resolve(null);
 }
-return null;
+} catch (ex) {
+console.warn("[RuianStorage] 读取失败: " + ex);
+resolve(null);
 }
-// 读取 /options 文本；不存在返回 null
-window.__ruianStorageReadOptions = async function () {
-try {
-var db = await findGameDB();
-if (!db) {
-console.warn("[RuianStorage] 未找到游戏 IndexedDB 数据库（首次游玩？）");
-return null;
-}
-try {
-var rec = await getRecord(db, OPTIONS_PATH);
-return rec ? decodeData(rec.data) : null;
-} finally { db.close(); }
-} catch (e) {
-console.warn("[RuianStorage] 读取失败: " + e);
-return null;
-}
+});
 };
-// 写入 /options 文本；成功返回 true
-window.__ruianStorageWriteOptions = async function (text) {
+// 写入设置文本（base64 编码）；成功返回 true
+window.__ruianStorageWriteOptions = function (text) {
+return new Promise(function (resolve) {
 try {
-var db = await findGameDB();
-if (!db) {
-console.warn("[RuianStorage] 未找到游戏 IndexedDB 数据库，无法写入 /options");
-return false;
-}
+var ls = getStorage();
+if (!ls) { resolve(false); return; }
 try {
-await putRecord(db, OPTIONS_PATH, encodeData(text));
-console.log("[RuianStorage] /options 已写入（" + (text.split("\n").length) + " 行）");
-return true;
-} finally { db.close(); }
-} catch (e) {
-console.warn("[RuianStorage] 写入失败: " + e);
-return false;
+ls.setItem(FULL_KEY, textToB64(text));
+console.log("[RuianStorage] /options 已写入 localStorage（" + (text.split("\n").length) + " 行）");
+resolve(true);
+} catch (ex) {
+console.warn("[RuianStorage] 写入失败: " + ex);
+resolve(false);
 }
+} catch (ex) {
+console.warn("[RuianStorage] 写入失败: " + ex);
+resolve(false);
+}
+});
 };
 // 设置文本 → map
 window.__ruianStorageParse = function (text) {
@@ -154,10 +110,7 @@ return out.join("\n");
 };
 // base64(UTF-8) → 文本
 window.__ruianStorageB64ToText = function (b64) {
-var bin = atob(b64);
-var bytes = new Uint8Array(bin.length);
-for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-return new TextDecoder("utf-8").decode(bytes);
+return b64ToText(b64);
 };
 // 控制台工具
 window.__ruianStorage = {
@@ -165,7 +118,7 @@ read: function () { return window.__ruianStorageReadOptions(); },
 write: function (t) { return window.__ruianStorageWriteOptions(t); },
 dump: function () {
 return window.__ruianStorageReadOptions().then(function (t) {
-return t === null ? "（/options 不存在）" : t;
+return t === null ? "（设置不存在）" : t;
 });
 }
 };
