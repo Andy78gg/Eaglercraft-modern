@@ -1,25 +1,22 @@
 /*!
-* Ruian Mod 屏蔽 (modfilter.js)  v2.1
+* Ruian Mod 屏蔽 (modfilter.js)  v3.0
 * ---------------------------------------------
-* 在游戏启动前强制修改 /options（IndexedDB 虚拟文件系统）里的指定 Modern 设置：
+* 在游戏启动前强制修改游戏设置存储里的指定 Modern 设置：
+*   存储 = localStorage["_eaglercraft_1.12.g"]（base64 纯文本，实测确认）
 *   - 动态模糊 Motion Blur        → modern_motionBlur:false
 *   - 关闭 Boss 血条 Disable Boss Bar → modern_disableBossBar:false
 *   - 图腾计数 Totem Counter      → modern_totemCounter:false
 *
-* v2.1 变更（开放 Mod 菜单）：
+* v3.0 变更：
+*   - 存储位置修正：v2.x 写 IndexedDB /options 是给死数据（游戏不读），
+*     本版通过 ruianstorage v1.2 写 localStorage["_eaglercraft_1.12.g"]，
+*     与游戏真实读取位置一致 → 屏蔽项真正生效。
+*   - Mod 菜单保持开放（沿用 v2.1）：删除 key.modmenu / key_key.modmenu 残留，
+*     让游戏使用内置默认的 Mod 菜单快捷键，玩家也可在 Controls 里自行绑定。
+*
+* v2.1 变更（沿用）：
 *   - 移除 "key.modmenu:-1" 强制禁用，Mod 菜单恢复可用；
-*   - 写入前主动删除残留的 key.modmenu 键（含旧版错误键 key_key.modmenu），
-*     让游戏使用内置默认的 Mod 菜单快捷键，玩家也可在 Controls 里自行绑定；
 *   - 仅保留上述三项 Modern 功能强制关闭（存在则覆盖，不存在则新增）。
-*
-* v2.0 重大修正：
-*   游戏设置真实存储在 IndexedDB 的 /options 文件里，不是 localStorage！
-*   （wasm 只有 PlatformFilesystem 桥接，无 localStorage；v1.x 写 localStorage
-*     是写给"死数据"，游戏根本不读 → 这就是一直没生效的根因）
-*   本版通过 ruianstorage.js 读写 IndexedDB 的 /options。
-*
-* v1.1 修复（沿用）：
-*   按键绑定键名是 "key.modmenu" 而非 "key_key.modmenu"。
 *
 * 时序（在 wasm/index.html 中，全部 await 串行）：
 *   ruianstorage → perfmod(Boost 写完整配置) → preset(合并 11 项) →
@@ -37,7 +34,7 @@ var FORCE_KEYS = {
 // 开放 Mod 菜单：写入前强制删除这些键，让游戏使用默认的 Mod 菜单快捷键
 // （v2.0 曾写入 key.modmenu:-1，不删掉的话菜单仍然打不开）
 var REMOVE_KEYS = ["key.modmenu", "key_key.modmenu"];
-// 空 /options 时的最小兜底（缺的键游戏会用默认值，不会崩溃）
+// 空设置时的最小兜底（缺的键游戏会用默认值，不会崩溃）
 function minimalBase() {
 return "version:1343";
 }
@@ -52,7 +49,7 @@ var map = {};
 if (text !== null && text.length > 0) {
 map = window.__ruianStorageParse(text);
 } else {
-console.warn("[RuianModFilter] /options 不存在，使用最小兜底（依赖 Boost 先写完整配置）。");
+console.warn("[RuianModFilter] 设置不存在，使用最小兜底（依赖 Boost 先写完整配置）。");
 map = window.__ruianStorageParse(minimalBase());
 }
 var fKeys = Object.keys(FORCE_KEYS);
@@ -66,7 +63,7 @@ if (rKeys[k] in map) delete map[rKeys[k]];
 var newText = window.__ruianStorageSerialize(map);
 var ok = await window.__ruianStorageWriteOptions(newText);
 if (ok) {
-console.log("[RuianModFilter] v2.1 applied: MotionBlur/BossBar/TotemCounter 已关闭, Mod 菜单已开放(key.modmenu 恢复默认)");
+console.log("[RuianModFilter] v3.0 applied: MotionBlur/BossBar/TotemCounter 已关闭, Mod 菜单已开放(key.modmenu 恢复默认)");
 }
 return ok;
 } catch (ex) {
@@ -83,7 +80,7 @@ window.__ruianModFilter = {
 apply: function () { return applyModFilter(); },
 dump: function () {
 return window.__ruianStorageReadOptions().then(function (text) {
-if (text === null) return "（/options 不存在）";
+if (text === null) return "（设置不存在）";
 var lines = text.split("\n");
 var out = [];
 for (var i = 0; i < lines.length; i++) {
